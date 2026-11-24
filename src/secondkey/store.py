@@ -199,5 +199,13 @@ class Store:
     def list_snapshots(self, limit: int = 50) -> list[Snapshot]:
         return [self._snap(r) for r in self.db.execute("SELECT * FROM snapshots ORDER BY created DESC LIMIT ?", (limit,))]
 
+    def set_snapshot_status(self, sid: str, status: str) -> None:
+        self.db.execute("UPDATE snapshots SET status=? WHERE id=?", (status, sid))
+
+    def live_snapshots(self) -> list[Snapshot]:
+        """Snapshots whose files still exist on disk, oldest first."""
+        return [self._snap(r) for r in self.db.execute(
+            "SELECT * FROM snapshots WHERE status IN ('ok', 'restored', 'unused') ORDER BY created")]
+
     def mark_restored(self, sid: str, by: str) -> None:
         self.db.execute("UPDATE snapshots SET status='restored', restored_at=?, restored_by=? WHERE id=?", (now(), by, sid))

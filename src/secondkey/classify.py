@@ -32,6 +32,27 @@ SECRET_DIRS = ("/.ssh/", "/.aws/", "/.gnupg/", "/.config/gcloud/", "/.kube/", "/
 SAFE_SECRET_NAMES = {".env.example", ".env.sample", ".env.template", ".env.dist"}
 
 
+PURE_READERS = {"cat", "less", "more", "head", "tail", "grep", "rg", "egrep", "fgrep", "ls", "stat", "wc", "diff",
+                "file", "bat", "jq", "yq", "sha256sum", "md5sum", "realpath", "readlink", "test", "["}
+PROTECTED_MARKERS = (".secondkey/", "/.secondkey", ".claude/settings.json", ".claude/settings.local.json",
+                     ".cursor/hooks.json")
+AGENT_READ_ONLY_SUBCOMMANDS = {"check", "pending", "show", "log", "snapshots", "policy", "doctor", "--version", "-h", "--help"}
+
+
+def protected_path(path: str) -> bool:
+    """Files that control SecondKey itself: an agent must never change them."""
+    if not path:
+        return False
+    p = os.path.expanduser(path.lstrip(">")).replace("\\", "/")
+    home = os.environ.get("SECONDKEY_HOME")
+    if home and os.path.abspath(p).startswith(os.path.abspath(os.path.expanduser(home))):
+        return True
+    while p.startswith("./"):
+        p = p[2:]
+    norm = p if p.startswith("/") else "/" + p
+    return any(m in norm or norm.endswith(m.rstrip("/")) for m in PROTECTED_MARKERS)
+
+
 @dataclass
 class Action:
     category: str
@@ -103,6 +124,86 @@ def _unwrap(argv: list[str]) -> list[str]:
             continue
         break
     return argv[i:]
+
+
+RUNNERS = {"npx": 1, "bunx": 1, "pnpx": 1, "uvx": 1}
+RUNNER_SUB = {"pnpm": ("dlx", "exec"), "yarn": ("dlx", "exec"), "npm": ("exec",), "uv": ("run",), "poetry": ("run",),
+              "pipenv": ("run",), "bundle": ("exec",), "pdm": ("run",), "hatch": ("run",)}
+
+
+def _unwrap_runner(argv: list[str]) -> list[str]:
+    for _ in range(3):
+        if not argv:
+            return argv
+        base = os.path.basename(argv[0])
+        if base in RUNNERS:
+            argv = [a for a in argv[1:] if a not in ("-y", "--yes", "--no-install")]
+            continue
+        if base in RUNNER_SUB and len(argv) > 1 and argv[1] in RUNNER_SUB[base]:
+            argv = [a for a in argv[2:] if a != "--"]
+            continue
+        break
+    return argv
+
+
+def _database_url(env: dict[str, str]) -> str | None:
+    for var in ("SECONDKEY_DATABASE_URL", "DATABASE_URL", "POSTGRES_URL", "DB_URL"):
+        v = env.get(var)
+        if v and v.split(":", 1)[0] in ("postgres", "postgresql"):
+            return v
+    return None
+
+
+MIGRATION_RULES: list[tuple[str, str, str]] = [
+    # (program, regex over the rest of argv joined, category)
+    ("alembic", r"\bdowngrade\b", "db.migrate_down"),
+    ("prisma", r"\bmigrate\s+reset\b|\bdb\s+push\b.*--(force-reset|accept-data-loss)", "db.reset"),
+    ("rails", r"\bdb:(drop|reset|schema:load|migrate:reset|purge|truncate_all)\b", "db.reset"),
+    ("rails", r"\bdb:(rollback|migrate:down|migrate:redo)\b", "db.migrate_down"),
+    ("rake", r"\bdb:(drop|reset|schema:load|migrate:reset|purge|truncate_all)\b", "db.reset"),
+    ("rake", r"\bdb:(rollback|migrate:down|migrate:redo)\b", "db.migrate_down"),
+    ("manage.py", r"\b(flush|reset_db|sqlflush)\b", "db.reset"),
+    ("manage.py", r"\bmigrate\s+\S+\s+zero\b", "db.migrate_down"),
+    ("sequelize", r"\bdb:drop\b", "db.reset"),
+    ("sequelize", r"\bdb:migrate:undo", "db.migrate_down"),
+    ("sequelize-cli", r"\bdb:drop\b", "db.reset"),
+    ("sequelize-cli", r"\bdb:migrate:undo", "db.migrate_down"),
+    ("knex", r"\bmigrate:(rollback|down)\b", "db.migrate_down"),
+    ("supabase", r"\bdb\s+reset\b", "db.reset"),
+    ("typeorm", r"\bschema:drop\b", "db.reset"),
+    ("typeorm", r"\bmigration:revert\b", "db.migrate_down"),
+    ("diesel", r"\bdatabase\s+reset\b", "db.reset"),
+    ("diesel", r"\bmigration\s+(revert|redo)\b", "db.migrate_down"),
+    ("flyway", r"\bclean\b", "db.reset"),
+    ("liquibase", r"\bdrop-?all\b", "db.reset"),
+    ("liquibase", r"\brollback", "db.migrate_down"),
+    ("goose", r"\breset\b", "db.reset"),
+    ("goose", r"\b(down|down-to)\b", "db.migrate_down"),
+    ("migrate", r"\bdrop\b", "db.reset"),
+    ("migrate", r"\bdown\b", "db.migrate_down"),
+    ("dbmate", r"\bdrop\b", "db.reset"),
+    ("dbmate", r"\b(down|rollback)\b", "db.migrate_down"),
+    ("drizzle-kit", r"\bdrop\b", "db.migrate_down"),
+]
+
+
+def _migration(argv: list[str], env: dict[str, str]) -> Action | None:
+    prog = os.path.basename(argv[0])
+    rest = argv[1:]
+    if prog.startswith("python") and rest and os.path.basename(rest[0]) == "manage.py":
+        prog, rest = "manage.py", rest[1:]
+    elif prog == "manage.py" or argv[0].endswith("/manage.py"):
+        prog = "manage.py"
+    elif prog in ("rails", "rake") or argv[0].endswith(("bin/rails", "bin/rake")):
+        prog = "rails" if "rails" in argv[0] else "rake"
+    text = " ".join(rest)
+    for p_name, rx, cat in MIGRATION_RULES:
+        if prog == p_name and re.search(rx, text):
+            url = _database_url(env)
+            target = {"conn": {"dbname": url}, "tables": ["*"], "kind": cat} if url else {}
+            note = "" if url else " (no Postgres DATABASE_URL found, so no automatic snapshot)"
+            return Action(cat, f"{prog} {text}"[:110] + note, "postgres" if url else None, target)
+    return None
 
 
 def _expand(arg: str, env: dict[str, str]) -> str:
@@ -177,6 +278,34 @@ def _psql(argv: list[str], cwd: str, env: dict[str, str]) -> list[Action]:
     return actions
 
 
+def _mysql_conn(args: list[str]) -> dict[str, str]:
+    conn: dict[str, str] = {}
+    for key, shorts, longs in (("host", ("-h",), ("--host",)), ("port", ("-P",), ("--port",)), ("user", ("-u",), ("--user",)),
+                               ("database", ("-D",), ("--database",))):
+        v = _opt_value(args, shorts, longs)
+        if v:
+            conn[key] = v[-1]
+    for a in args:
+        if a.startswith("-p") and len(a) > 2 and not a.startswith("--"):
+            conn["password"] = a[2:]
+        elif a.startswith("--password="):
+            conn["password"] = a.split("=", 1)[1]
+    takes = {"-h", "-P", "-u", "-D", "-e", "--host", "--port", "--user", "--database", "--execute"}
+    pos, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in takes:
+            skip = True
+            continue
+        if not a.startswith("-"):
+            pos.append(a)
+    if pos and "database" not in conn:
+        conn["database"] = pos[0]
+    return conn
+
+
 def _generic_sql(prog: str, argv: list[str], env: dict[str, str]) -> list[Action]:
     args = [_expand(a, env) for a in argv[1:]]
     flags = {"mysql": (("-e",), ("--execute",)), "mariadb": (("-e",), ("--execute",)),
@@ -188,8 +317,13 @@ def _generic_sql(prog: str, argv: list[str], env: dict[str, str]) -> list[Action
         parts = pos[1:]
     if not parts:
         return [Action("sql.interactive", f"{prog} session (statements unknown)")]
-    return [Action(s.category, s.text[:120], None, {"tables": s.tables, "client": prog})
-            for s in classify_sql("\n;\n".join(parts))]
+    conn = _mysql_conn(args) if prog in ("mysql", "mariadb") else {}
+    out = []
+    for st in classify_sql("\n;\n".join(parts)):
+        provider = "mysql" if conn and st.tables and st.category in ("sql.drop", "sql.truncate", "sql.delete", "sql.update", "sql.alter") else None
+        out.append(Action(st.category, st.text[:120], provider,
+                          {"tables": st.tables, "client": prog, "conn": conn, "where": st.where, "kind": st.category}))
+    return out
 
 
 def _rm(argv: list[str], cwd: str, env: dict[str, str]) -> list[Action]:
@@ -316,6 +450,11 @@ def _helm(argv: list[str]) -> list[Action]:
 def _docker(argv: list[str]) -> list[Action]:
     args = [a for a in argv[1:] if not a.startswith("-")]
     joined = " ".join(args[:2])
+    if joined == "volume rm" or (args[:1] == ["volume"] and len(args) > 2 and args[1] == "rm"):
+        vols = args[2:]
+        return [Action("docker.delete", "docker volume rm " + " ".join(vols), "docker", {"volumes": vols})]
+    if joined == "volume prune" or (joined == "system prune" and ("--volumes" in argv or "-a" in argv and "--volumes" in argv)):
+        return [Action("docker.delete", "docker " + " ".join(argv[1:]), "docker", {"dangling": True})]
     if args[:1] in (["rm"], ["rmi"]) or joined in ("system prune", "volume rm", "volume prune", "container prune",
                                                     "image prune", "network rm", "container rm", "image rm",
                                                     "compose down", "builder prune"):
@@ -323,9 +462,32 @@ def _docker(argv: list[str]) -> list[Action]:
     return [Action("docker.other", "docker " + joined)]
 
 
+def _aws_target(argv: list[str]) -> tuple[str, dict[str, Any]] | None:
+    args = argv[1:]
+    common = {k: v[-1] for k, v in (("region", _opt_value(args, (), ("--region",))), ("profile", _opt_value(args, (), ("--profile",)))) if v}
+    words = [a for a in args if not a.startswith("-")]
+    if words[:2] == ["ec2", "delete-volume"]:
+        vid = _opt_value(args, (), ("--volume-id",))
+        if vid:
+            return "ebs", {**common, "volume_id": vid[-1]}
+    if words[:2] == ["rds", "delete-db-instance"]:
+        dbi = _opt_value(args, (), ("--db-instance-identifier",))
+        if dbi:
+            return "rds", {**common, "instance": dbi[-1]}
+    if words[:1] == ["s3"] and len(words) > 2 and words[1] in ("rm", "rb") and words[2].startswith("s3://"):
+        return "s3", {**common, "uri": words[2], "recursive": "--recursive" in args or words[1] == "rb",
+                      "bucket_delete": words[1] == "rb"}
+    return None
+
+
 def _cloud(prog: str, argv: list[str]) -> list[Action]:
     words = [a for a in argv[1:] if not a.startswith("-")]
     text = " ".join(words)
+    if prog == "aws":
+        hit = _aws_target(argv)
+        if hit:
+            kind, target = hit
+            return [Action("cloud.delete", f"aws {text}"[:120], "aws", {"kind": kind, **target})]
     if re.search(r"\b(delete|terminate|destroy|remove|purge|rb|rm|deregister|revoke)\b|\bdelete-[\w-]+|\bterminate-[\w-]+", text):
         return [Action("cloud.delete", f"{prog} {text}"[:120])]
     if re.search(r"\b(describe|list|get|show|ls|info)\b|\b(describe|list|get)-[\w-]+", text):
@@ -342,10 +504,14 @@ def classify_shell(command: str, cwd: str, env: dict[str, str] | None = None, _d
         return [Action("shell.unparsed", f"unparsable shell command: {command[:100]}")]
     actions: list[Action] = []
     for idx, (raw, op) in enumerate(pipes):
-        argv = _unwrap(raw)
+        argv = _unwrap_runner(_unwrap(raw))
         if not argv:
             continue
         prog = os.path.basename(argv[0])
+        mig = _migration(argv, env)
+        if mig:
+            actions.append(mig)
+            continue
         prev_prog = os.path.basename(_unwrap(pipes[idx - 1][0])[0]) if idx and pipes[idx - 1][1] == "|" and _unwrap(pipes[idx - 1][0]) else ""
         if prog in SHELLS and prev_prog in ("curl", "wget"):
             actions.append(Action("shell.pipe_to_shell", f"{prev_prog} ... | {prog}"))
@@ -356,6 +522,25 @@ def classify_shell(command: str, cwd: str, env: dict[str, str] | None = None, _d
             continue
         if prog == "eval" and _depth < 3:
             actions.extend(classify_shell(" ".join(argv[1:]), cwd, env, _depth + 1))
+            continue
+        if prog == "secondkey" or (prog.startswith("python") and argv[1:3] == ["-m", "secondkey"]):
+            rest = argv[3:] if prog.startswith("python") else argv[1:]
+            sub = next((a for a in rest if not a.startswith("-") or a in ("--version", "-h", "--help")), "")
+            if sub in AGENT_READ_ONLY_SUBCOMMANDS:
+                actions.append(Action("secondkey.read", "secondkey " + " ".join(rest)[:80]))
+            elif sub in ("approve", "deny"):
+                actions.append(Action("secondkey.self_approve", f"agent tried to run secondkey {sub} itself"))
+            else:
+                actions.append(Action("secondkey.admin", "agent tried to run secondkey " + " ".join(rest)[:60]))
+            continue
+        expanded = [_expand(a, env) for a in argv[1:]]
+        redirect_target = any((a in (">", ">>", "1>", "2>", "&>") and i + 1 < len(expanded) and protected_path(expanded[i + 1]))
+                              or (a.startswith(">") and protected_path(a.lstrip(">")))
+                              for i, a in enumerate(expanded))
+        harmless_git = prog == "git" and next((a for a in argv[1:] if not a.startswith("-")), "") in (
+            "add", "diff", "log", "show", "status", "blame", "commit")
+        if redirect_target or (prog not in PURE_READERS and not harmless_git and any(protected_path(a) for a in expanded)):
+            actions.append(Action("secondkey.tamper", f"{prog} would change SecondKey's own settings or state"))
             continue
         candidates = [a for a in argv[1:] if not a.startswith("-")]
         if prog in ("cp", "scp", "rsync") and candidates:
@@ -401,6 +586,9 @@ def classify_tool(tool_name: str, tool_input: dict[str, Any], cwd: str, env: dic
     """Classify a Claude Code / MCP tool call."""
     if tool_name in ("Bash", "PowerShell", "shell", "run_shell_command"):
         return classify_shell(str(tool_input.get("command", "")), cwd, env)
+    if tool_name == "SQL":  # from the Postgres proxy
+        from .proxy import classify_query
+        return classify_query(str(tool_input.get("command", "")), dict(tool_input.get("conn") or {}))
     path = str(tool_input.get("file_path") or tool_input.get("path") or tool_input.get("notebook_path") or "")
     if tool_name in ("Read", "Grep", "Glob", "NotebookRead", "LS"):
         if path and is_secret_path(path):
@@ -410,6 +598,8 @@ def classify_tool(tool_name: str, tool_input: dict[str, Any], cwd: str, env: dic
             return [Action("secrets.read", f"Glob {pattern}")]
         return [Action("fs.read", f"{tool_name} {path}".strip())]
     if tool_name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+        if path and protected_path(path):
+            return [Action("secondkey.tamper", f"{tool_name} would change SecondKey's own settings ({path})")]
         if path and is_secret_path(path):
             return [Action("secrets.write", f"{tool_name} {path}")]
         return [Action("fs.write", f"{tool_name} {path}".strip())]

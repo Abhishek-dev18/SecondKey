@@ -21,9 +21,11 @@ from .policy import Decision, Policy, load_policy
 from .snapshots import plan as plan_snapshots
 from .snapshots import take_all
 from .store import Request, Snapshot, Store
+from .util import redact
 
 VOLATILE_INPUT_KEYS = {"description", "timeout", "run_in_background", "dangerouslyDisableSandbox"}
-QUIET_CATEGORIES = ("fs.read", "tool.", "shell.other", "git.read", "sql.read", "k8s.read", "tf.read", "cloud.read")
+QUIET_CATEGORIES = ("fs.read", "tool.", "shell.other", "git.read", "sql.read", "sql.write", "k8s.read", "tf.read",
+                    "cloud.read", "secondkey.read")
 
 
 @dataclass
@@ -36,6 +38,8 @@ class GateResult:
 
 
 def command_text(tool: str, tool_input: dict[str, Any]) -> str:
+    if tool == "SQL":
+        return f"[{tool_input.get('database', '')}] {tool_input.get('command', '')}"
     if "command" in tool_input:
         return str(tool_input["command"])
     return f"{tool} " + json.dumps({k: v for k, v in tool_input.items() if k not in VOLATILE_INPUT_KEYS}, sort_keys=True)
@@ -71,7 +75,7 @@ def evaluate(*, source: str, tool: str, tool_input: dict[str, Any], cwd: str, en
     store = store or Store()
     actions = classify_tool(tool, tool_input, cwd, env)
     decision = policy.evaluate(actions)
-    cmd = command_text(tool, tool_input)
+    cmd = redact(command_text(tool, tool_input))
     base = {"source": source, "tool": tool, "cwd": cwd, "command": cmd[:2000], "categories": _categories(decision)}
 
     if decision.decision == "deny":

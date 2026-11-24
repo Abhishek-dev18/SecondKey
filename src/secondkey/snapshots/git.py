@@ -206,3 +206,11 @@ class GitProvider(Provider):
                 git(repo, "stash", "store", "-m", msg or "restored by secondkey", sha)
                 out.append(f"stash restored: {msg}")
         return out
+
+    def cleanup(self, snap: Snapshot) -> None:
+        repo = snap.meta.get("repo")
+        if not repo or not os.path.isdir(repo):
+            return
+        refs = run(["git", "-C", repo, "for-each-ref", "--format=%(refname)", f"refs/secondkey/{snap.id}/"], check=False).stdout
+        for ref in refs.split():
+            run(["git", "-C", repo, "update-ref", "-d", ref], check=False)

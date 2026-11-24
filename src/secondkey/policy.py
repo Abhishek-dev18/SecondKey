@@ -16,6 +16,8 @@ from .classify import Action
 from .util import home
 
 STRICTNESS = {"allow": 0, "ask": 1, "deny": 2}
+GUARD_REASON = ("An agent can't approve its own requests, run undo, or change SecondKey's policy, hooks or state. "
+                "Only a human can turn the second key")
 
 
 class PolicyError(ValueError):
@@ -75,6 +77,14 @@ class Policy:
         return bool(self.approval.get("require_snapshot", True))
 
     @property
+    def retention_days(self) -> float:
+        return float(self.snapshots.get("retention_days", 14))
+
+    @property
+    def max_total_bytes(self) -> int:
+        return int(float(self.snapshots.get("max_total_mb", 5120)) * 1024 * 1024)
+
+    @property
     def max_file_snapshot_bytes(self) -> int:
         return int(float(self.snapshots.get("max_file_snapshot_mb", 500)) * 1024 * 1024)
 
@@ -84,6 +94,9 @@ class Policy:
         return val or None
 
     def verdict(self, action: Action) -> Verdict:
+        if action.category.startswith("secondkey.") and action.category != "secondkey.read":
+            # Built-in guard, not configurable: the agent must never hold the second key.
+            return Verdict(action, "deny", False, "built-in guard", GUARD_REASON)
         for i, rule in enumerate(self.rules):
             if rule.matches(action.category):
                 return Verdict(action, rule.action, rule.snapshot, f"rules[{i}] {', '.join(rule.match)[:60]}", rule.reason)

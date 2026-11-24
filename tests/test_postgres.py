@@ -113,3 +113,123 @@ def test_exact_mode_removes_newer_rows(db, tmp_path):
     sql(db, "INSERT INTO carts(user_id, age) VALUES (1, 5)")
     assert cli(["undo", rid, "--yes", "--mode", "exact"]) == 0
     assert sql(db, "SELECT count(*) FROM carts") == "600"
+
+
+# ---------------------------------------------------------------- proxy, migrations, neon
+
+import asyncio
+import socket
+import stat
+import threading
+from urllib.parse import parse_qs
+
+pg8000 = pytest.importorskip("pg8000.native")
+
+
+def _upstream_and_auth(dsn):
+    parts = urlsplit(dsn)
+    q = {k: v[0] for k, v in parse_qs(parts.query).items()}
+    host = q.get("host") or parts.hostname or "127.0.0.1"
+    port = q.get("port") or str(parts.port or 5432)
+    user = q.get("user") or parts.username or "postgres"
+    upstream = f"{host}/.s.PGSQL.{port}" if host.startswith("/") else f"{host}:{port}"
+    return upstream, user, parts.password, parts.path.lstrip("/")
+
+
+@pytest.fixture
+def proxy(db, tmp_path):
+    from secondkey.proxy import ProxyConfig, serve
+    upstream, user, password, dbname = _upstream_and_auth(db)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    cfg = ProxyConfig(listen_port=port, upstream=upstream, cwd=str(tmp_path))
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run():
+        asyncio.set_event_loop(loop)
+        ev = asyncio.Event()
+        task = loop.create_task(serve(cfg, ev))
+        loop.run_until_complete(ev.wait())
+        ready.set()
+        try:
+            loop.run_until_complete(task)
+        except asyncio.CancelledError:
+            pass
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    assert ready.wait(10)
+    if password:
+        os.environ["PGPASSWORD"] = password
+    yield lambda: pg8000.Connection(user, host="127.0.0.1", port=port, database=dbname, password=password)
+    loop.call_soon_threadsafe(lambda: [t.cancel() for t in asyncio.all_tasks(loop)])
+
+
+def test_proxy_holds_script_queries_then_approve_and_undo(proxy, db):
+    con = proxy()
+    assert con.run("SELECT count(*) FROM orders")[0][0] == 2000
+    with pytest.raises(Exception) as e:
+        con.run("DELETE FROM orders WHERE total < :t", t=1001)
+    assert "secondkey: held req_" in str(e.value)
+    assert con.run("SELECT 1")[0][0] == 1                      # connection still healthy
+    rid = str(e.value).split("held ")[1].split(",")[0]
+    assert cli(["approve", rid]) == 0
+    con.run("DELETE FROM orders WHERE total < :t", t=1001)
+    assert sql(db, "SELECT count(*) FROM orders") == "1000"
+    snap = Store().snapshots_for(rid)[0]
+    assert cli(["undo", snap.id, "--yes"]) == 0
+    assert sql(db, "SELECT count(*) FROM orders") == "2000"
+
+
+def test_proxy_simple_protocol_and_transactions(proxy, db):
+    con = proxy()
+    con.run("BEGIN")
+    con.run("INSERT INTO carts(user_id, age) VALUES (1, 1)")
+    with pytest.raises(Exception) as e:
+        con.run("DROP TABLE carts")
+    assert "secondkey" in str(e.value).lower()
+    con.run("ROLLBACK")
+    assert sql(db, "SELECT count(*) FROM carts") == "600"
+    with pytest.raises(Exception):
+        con.run("DROP DATABASE postgres")                     # denied outright
+    assert con.run("SELECT count(*) FROM users")[0][0] == 500
+
+
+def test_migration_whole_database_snapshot(db, tmp_path):
+    os.environ["DATABASE_URL"] = db
+    try:
+        r = call_hook("alembic downgrade -1", tmp_path)
+        assert "whole database" in r["permissionDecisionReason"]
+        rid = r["permissionDecisionReason"].split("(request ")[1].split(")")[0]
+        cli(["approve", rid])
+        assert decision_of(call_hook("alembic downgrade -1", tmp_path)) == "allow"
+        sql(db, "DROP TABLE carts; DROP TABLE orders; ALTER TABLE users ADD COLUMN junk int")   # what the downgrade did
+        assert cli(["undo", rid, "--yes"]) == 0
+        assert sql(db, "SELECT count(*) FROM orders") == "2000"
+        assert sql(db, "SELECT count(*) FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'junk'") == "0"
+    finally:
+        del os.environ["DATABASE_URL"]
+
+
+def test_neon_strategy_records_point_in_time(db, tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "neon.log"
+    p = bin_dir / "neonctl"
+    p.write_text(f"#!/bin/sh\necho \"$*\" >> {log}\n")
+    p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    proj = tmp_path / "app"
+    (proj / ".secondkey").mkdir(parents=True)
+    (proj / ".git").mkdir()
+    from secondkey.policy import default_policy_text
+    (proj / ".secondkey" / "policy.yaml").write_text(default_policy_text().replace(
+        "postgres_strategy: dump", "postgres_strategy: neon\n  neon_project_id: proj-1\n  neon_branch: main"))
+    rid, reason = run_through_gate('psql "$SK_DB" -c "TRUNCATE carts"', proj, db)
+    assert "Neon branch main point-in-time" not in reason  # table actions show row counts
+    snap = Store().snapshots_for(rid)[0]
+    assert snap.meta["strategy"] == "neon" and snap.meta["timestamp"].endswith("Z")
+    assert not os.path.exists(os.path.join(snap.path, "dump.pgc"))      # no copy needed
+    cli(["undo", snap.id, "--yes"])
+    assert f"branches restore main ^self@{snap.meta['timestamp']} --preserve-under-name main_before_{snap.id} --project-id proj-1" in log.read_text()

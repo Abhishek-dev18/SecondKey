@@ -12,7 +12,7 @@ SecondKey is a change-control gate for AI agents. It sits between Claude Code (o
 - **Secrets are never read.** `.env`, cloud credentials, SSH keys and `curl | sh` are denied by policy.
 - **Everything is logged** in a hash-chained audit log, so tampering is detectable.
 
-> Status: v0.1, early. Works with Claude Code today; other agents can use `secondkey exec`.
+> Status: v0.2, early. Works with Claude Code and Cursor (hooks), any Postgres client via the proxy, and anything else via `secondkey exec`.
 
 ## Install
 
@@ -20,9 +20,10 @@ SecondKey is a change-control gate for AI agents. It sits between Claude Code (o
 pipx install git+https://github.com/Abhishek-dev18/SecondKey
 cd your-project
 secondkey init          # writes .secondkey/policy.yaml and adds the Claude Code hook
+secondkey doctor        # checks hooks, tools and state
 ```
 
-`init --scope user` installs it for every project instead. Requires Python 3.9+. For Postgres snapshots, `psql`, `pg_dump` and `pg_restore` must be on your PATH (same major version as your server or newer).
+`init --agent cursor` adds the Cursor hooks (repeat `--agent` for both). `init --scope user` installs for every project instead. Try it end to end with [docs/try-it-with-claude-code.md](docs/try-it-with-claude-code.md). Requires Python 3.9+. For Postgres snapshots, `psql`, `pg_dump` and `pg_restore` must be on your PATH (same major version as your server or newer).
 
 ## What it looks like
 
@@ -83,6 +84,9 @@ Restore? [y/N] y
 | `secondkey log` | Audit log. `--verify` checks the hash chain |
 | `secondkey policy` | Show the effective policy |
 | `secondkey exec -- <cmd>` | Run a command through the gate, for agents without hook support. Waits up to 5 min for approval |
+| `secondkey proxy --upstream host:5432` | Postgres proxy: gates every query from scripts, ORMs and migrations, not just shell commands |
+| `secondkey prune` | Delete old restore points (also runs automatically once a day; the newest is always kept) |
+| `secondkey doctor` | Check hooks, tools, policy, audit chain and snapshot storage |
 
 ## How it works
 
@@ -97,7 +101,9 @@ agent proposes a command
   → audit     every decision appended to a hash-chained log
 ```
 
-SecondKey never widens what Claude Code allows on its own: for allowed commands it returns no decision, so Claude Code's normal permission rules still apply. If SecondKey itself errors, the hook answers `ask` rather than crashing, because a crashing hook would let the command run.
+SecondKey never widens what Claude Code allows on its own: for allowed commands it returns no decision, so Claude Code's normal permission rules still apply. If SecondKey itself errors, the hook answers `ask` (Claude Code) or `deny` (Cursor) rather than crashing, because a crashing hook would let the command run.
+
+**The agent can't hold the second key.** A built-in guard, which no policy can turn off, denies an agent that tries to run `secondkey approve`/`deny`/`undo`/`prune`, touch `~/.secondkey/`, or change `.secondkey/policy.yaml`, `.claude/settings*.json` or `.cursor/hooks.json`. Commands are stored and logged with passwords and tokens masked, and the state directory is private to your user.
 
 ### What can be undone
 
@@ -106,6 +112,11 @@ SecondKey never widens what Claude Code allows on its own: for allowed commands 
 | **Postgres** `DROP`, `TRUNCATE`, `DELETE`, `UPDATE`, `ALTER` via `psql` | `pg_dump` of the affected tables, row counts, foreign keys on other tables that point at them | Dropped tables are recreated with indexes, constraints and sequences, and foreign keys are re-added. For tables that still exist, saved rows are put back by primary key and rows written since are kept (`--mode exact` removes them). Verified inside the transaction; if anything fails, nothing changes |
 | **Files** `rm`, `rm -rf` | tar.gz of the paths | Put back; refuses to overwrite paths that exist again unless `--force` |
 | **Git** force push, delete remote branch, `reset --hard`, `checkout -- .`, `clean`, `branch -D`, stash drop | Commits pinned under `refs/secondkey/…`, uncommitted changes saved with `git stash create`, untracked files archived | Force-push the old commit back, reset and re-apply changes, recreate branches, restore files. Your current changes are saved first |
+| **Migrations** `prisma migrate reset`, `alembic downgrade`, `rails db:drop`, `manage.py flush` and more | Whole-database `pg_dump` when a Postgres `DATABASE_URL` is set | The whole database restored in one transaction |
+| **Neon** (any of the above, `postgres_strategy: neon`) | Just the timestamp: no copy, works for any size | `neon branches restore <branch> ^self@<time>`; the current state is kept as a branch |
+| **MySQL / MariaDB** `mysql -e "DROP/DELETE/…"` | `mysqldump` of the affected tables | Replayed, row counts verified |
+| **AWS** `ec2 delete-volume`, `rds delete-db-instance`, `s3 rm/rb` | EBS snapshot, RDS manual snapshot, or S3 objects downloaded | New volume from the snapshot, instance restored, objects uploaded back |
+| **Docker** `volume rm`, `volume prune`, `system prune --volumes` | Volume contents tarred through a throwaway container | Volume recreated and unpacked |
 | **Kubernetes** `kubectl delete` | `kubectl get -o yaml`, cleaned of server fields | `kubectl apply`. Data in deleted volumes is not restored |
 | **Terraform** `destroy`, `apply`, `state rm/mv` | `terraform state pull` and the config's git commit | State surgery: state pushed back. Destroy: explains how to recreate from the saved config. Cloud resources can't be un-destroyed, and SecondKey won't pretend otherwise |
 
@@ -142,26 +153,33 @@ Run `secondkey check "<command>"` to see the category of any command. Policy loo
 
 State (approvals, snapshots, audit log) lives in `~/.secondkey/` (override with `SECONDKEY_HOME`).
 
-## Known limits (v0.1)
+## Known limits (v0.2)
 
-- SecondKey sees the commands an agent runs through its tools. An agent that connects to a database from its own code (say, a Python script it writes and runs) only shows up as `python script.py`. A SQL proxy is planned; until then, give agents scoped credentials.
-- SQL is classified for `psql` (snapshots), and `mysql`, `sqlite3` and `duckdb` (gating only). MCP tools are gated by name.
+- Hooks see the commands an agent runs. For Postgres, run `secondkey proxy` so scripts and ORMs are gated too. Other databases and APIs called from agent-written code aren't covered, so give agents scoped credentials.
+- An agent could still write a script that edits SecondKey's files directly; the guard covers tool calls and shell commands, not arbitrary code. Running agents as a separate OS user closes this.
+- MCP tools are gated by name; their effects can't be snapshotted automatically.
 - Approvals happen in the CLI, or Slack (notification only for now; buttons come with the hosted version).
-- Snapshots are local. Large tables mean large dumps; file snapshots above 500 MB are refused and reported as unprotected.
+- Snapshots are local. Dumps over `postgres_max_dump_mb` (2 GB) and file snapshots over 500 MB are refused and reported as unprotected; use the Neon strategy for big Postgres databases.
+- Tested on Linux. macOS should work; Windows is untested.
+
+More recipes: [docs/policy-cookbook.md](docs/policy-cookbook.md).
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                   # unit + git + files + stubbed k8s/terraform
-SECONDKEY_TEST_PG='postgresql://postgres:postgres@localhost:5432/postgres' pytest -q   # + real Postgres
+pytest -q                                   # unit + git + files + stubbed k8s/terraform/aws/docker/mysql
+SECONDKEY_TEST_PG='postgresql://postgres:postgres@localhost:5432/postgres' pytest -q   # + real Postgres and the proxy
 ```
+
+Releases: push a tag like `v0.2.0` and `.github/workflows/release.yml` publishes to PyPI (needs a one-time trusted-publisher setup on pypi.org, described in the workflow file). Licensed under Apache-2.0.
 
 ## This repo
 
 | Path | What it is |
 |---|---|
-| `src/secondkey/` | The CLI and hook (`classify.py`, `policy.py`, `gate.py`, `snapshots/`, `hooks/claude_code.py`) |
+| `src/secondkey/` | The CLI (`classify.py`, `policy.py`, `gate.py`, `snapshots/`, `hooks/`, `proxy.py`) |
+| `docs/` | Policy cookbook and a 5-minute Claude Code walkthrough |
 | `tests/` | Test suite |
 | `index.html`, `assets/` | Landing page (live demo of the gate) and logo files |
 

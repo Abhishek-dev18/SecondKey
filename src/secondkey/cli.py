@@ -86,12 +86,41 @@ def install_claude_hook(settings_path: Path) -> str:
     return "installed"
 
 
+CURSOR_EVENTS = ("beforeShellExecution", "beforeReadFile", "beforeMCPExecution")
+
+
+def install_cursor_hook(hooks_path: Path) -> str:
+    hooks_path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict[str, Any] = {"version": 1, "hooks": {}}
+    if hooks_path.exists():
+        try:
+            data = json.loads(hooks_path.read_text() or "{}")
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"{hooks_path} is not valid JSON ({e}); fix it and re-run init.")
+    data.setdefault("version", 1)
+    hooks = data.setdefault("hooks", {})
+    exe = shutil.which("secondkey")
+    command = f"{shlex.quote(exe)} hook cursor" if exe else f"{shlex.quote(sys.executable)} -m secondkey hook cursor"
+    added = 0
+    for ev in CURSOR_EVENTS:
+        entries = hooks.setdefault(ev, [])
+        if not any("secondkey hook cursor" in str(e.get("command", "")) for e in entries):
+            entries.append({"command": command, "timeout": 900})
+            added += 1
+    tmp = hooks_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.replace(hooks_path)
+    return "installed" if added else "already installed"
+
+
 def cmd_init(a: argparse.Namespace) -> int:
+    root = project_root(a.cwd)
     if a.scope == "user":
         policy_path, settings = home() / "policy.yaml", Path.home() / ".claude" / "settings.json"
+        cursor_hooks = Path.home() / ".cursor" / "hooks.json"
     else:
-        root = project_root(a.cwd)
         policy_path, settings = root / ".secondkey" / "policy.yaml", root / ".claude" / "settings.json"
+        cursor_hooks = root / ".cursor" / "hooks.json"
     policy_path.parent.mkdir(parents=True, exist_ok=True)
     if policy_path.exists() and not a.force:
         print(f"policy     {policy_path} {dim('(kept existing; --force to overwrite)')}")
@@ -102,7 +131,11 @@ def cmd_init(a: argparse.Namespace) -> int:
         policy_path.write_text(text)
         print(f"policy     {policy_path} {green('written')}")
     if not a.no_hook:
-        print(f"hook       {settings} {green(install_claude_hook(settings))}")
+        agents = a.agent or ["claude-code"]
+        if "claude-code" in agents:
+            print(f"hook       {settings} {green(install_claude_hook(settings))}")
+        if "cursor" in agents:
+            print(f"hook       {cursor_hooks} {green(install_cursor_hook(cursor_hooks))}")
     print(f"state      {home()}")
     print()
     print("Next: start Claude Code in this project. Try asking it to run")
@@ -164,9 +197,9 @@ def cmd_exec(a: argparse.Namespace) -> int:
 
 
 def cmd_hook(a: argparse.Namespace) -> int:
-    if a.agent != "claude-code":
-        print(f"unknown agent {a.agent!r}; supported: claude-code", file=sys.stderr)
-        return 0  # never block on a misconfiguration we can explain
+    if a.agent == "cursor":
+        from .hooks import cursor
+        return cursor.main()
     from .hooks import claude_code
     return claude_code.main()
 
@@ -274,6 +307,8 @@ def cmd_snapshots(a: argparse.Namespace) -> int:
         return 0
     for s in snaps:
         status = green(s.status) if s.status == "ok" else dim(s.status)
+        if s.status == "pruned" and not a.all:
+            continue
         print(f"{bold(s.id)}  {status:<8} {dim(ago(s.created)):<10} {s.provider:<9} {s.label}"
               + (f" {dim('(' + s.request_id + ')')}" if s.request_id else ""))
     return 0
@@ -294,6 +329,10 @@ def cmd_undo(a: argparse.Namespace) -> int:
         snaps = [s]
     rc = 0
     for s in snaps:
+        if s.status == "pruned":
+            print(f"{s.id} was pruned (older than the retention window); its files are gone.")
+            rc = 1
+            continue
         if s.status == "restored" and not a.force:
             print(f"{s.id} was already restored {ago(s.restored_at)} by {s.restored_by}; use --force to restore again.")
             continue
@@ -333,6 +372,93 @@ def cmd_undo(a: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_prune(a: argparse.Namespace) -> int:
+    policy = load_policy(a.cwd)
+    store = Store()
+    max_bytes = int(a.max_mb * 1024 * 1024) if a.max_mb is not None else None
+    removed = snapmod.prune(store, policy, a.older_than, max_bytes, dry_run=a.dry_run)
+    live = store.live_snapshots()
+    if not removed:
+        print(f"Nothing to prune. {len(live)} snapshot(s) kept.")
+        return 0
+    from .util import human_size
+    for s, reason, size in removed:
+        print(f"{'would remove' if a.dry_run else red('removed')}  {s.id}  {human_size(size):>8}  {dim(reason)}  {s.label[:60]}")
+    total = sum(b for _, _, b in removed)
+    print(f"{'Would free' if a.dry_run else 'Freed'} {human_size(total)}.")
+    if not a.dry_run:
+        audit.record("prune", snapshots=[s.id for s, _, _ in removed], by=whoami(), bytes=total)
+    return 0
+
+
+def cmd_doctor(a: argparse.Namespace) -> int:
+    import platform
+    from .util import human_size, run
+    ok_mark, warn_mark, bad_mark = green("✓"), orange("!"), red("✗")
+    problems = 0
+
+    def line(mark: str, label: str, detail: str) -> None:
+        print(f"  {mark} {label:<26} {detail}")
+
+    print(bold("SecondKey doctor"))
+    line(ok_mark, "version", f"secondkey {__version__}, Python {platform.python_version()}, {platform.system()}")
+    try:
+        p = load_policy(a.cwd)
+        line(ok_mark, "policy", f"{p.source} ({len(p.rules)} rules, approvals via {p.approval.get('via', 'secondkey')})")
+    except PolicyError as e:
+        line(bad_mark, "policy", str(e))
+        problems += 1
+        p = None
+    h = home()
+    mode = h.stat().st_mode & 0o777
+    line(ok_mark if not mode & 0o077 else warn_mark, "state directory", f"{h} (permissions {oct(mode)[2:]})")
+    root = project_root(a.cwd)
+    hooks = []
+    for name, path in (("Claude Code (project)", root / ".claude" / "settings.json"),
+                       ("Claude Code (user)", Path.home() / ".claude" / "settings.json"),
+                       ("Cursor (project)", root / ".cursor" / "hooks.json"),
+                       ("Cursor (user)", Path.home() / ".cursor" / "hooks.json")):
+        try:
+            if path.exists() and "secondkey hook" in path.read_text():
+                hooks.append(name)
+        except OSError:
+            pass
+    if hooks:
+        line(ok_mark, "agent hooks", ", ".join(hooks))
+    else:
+        line(bad_mark, "agent hooks", "none installed: run `secondkey init` (or `secondkey init --agent cursor`)")
+        problems += 1
+    tools = [("git", "git snapshots"), ("psql", "Postgres impact + restore"), ("pg_dump", "Postgres snapshots"),
+             ("pg_restore", "Postgres undo"), ("mysqldump", "MySQL snapshots"), ("kubectl", "Kubernetes snapshots"),
+             ("terraform", "Terraform state backup"), ("aws", "AWS EBS/RDS/S3 snapshots"), ("docker", "Docker volume snapshots"),
+             ("neonctl", "Neon branch snapshots")]
+    for tool, feature in tools:
+        path = shutil.which(tool)
+        if path:
+            ver = ""
+            if tool in ("pg_dump", "psql"):
+                import re as _re
+                m = _re.search(r"\d+\.\d+", run([tool, "--version"], check=False).stdout)
+                ver = f" (v{m.group(0)})" if m else ""
+            line(ok_mark, tool, f"{feature}{ver}")
+        else:
+            line(dim("·"), tool, dim(f"not found: {feature} unavailable"))
+    if p is not None:
+        line(ok_mark if p.slack_webhook() else dim("·"), "slack", "notifications on" if p.slack_webhook() else dim("off (set SECONDKEY_SLACK_WEBHOOK)"))
+    ok, n, msg = audit.verify()
+    line(ok_mark if ok else bad_mark, "audit log", msg)
+    problems += 0 if ok else 1
+    store = Store()
+    live = store.live_snapshots()
+    size = sum(snapmod.dir_size(s.path) for s in live if os.path.isdir(s.path))
+    line(ok_mark, "snapshots", f"{len(live)} kept, {human_size(size)} on disk")
+    pend = store.list_requests("pending")
+    line(orange("!") if pend else ok_mark, "pending approvals", f"{len(pend)}" + (" (run `secondkey pending`)" if pend else ""))
+    print()
+    print(green("All good.") if not problems else orange(f"{problems} problem(s) found."))
+    return 0 if not problems else 1
+
+
 def cmd_policy(a: argparse.Namespace) -> int:
     p = load_policy(a.cwd, a.policy)
     if a.default:
@@ -361,6 +487,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-hook", action="store_true", help="only write the policy")
     p.add_argument("--force", action="store_true", help="overwrite an existing policy")
     p.add_argument("--via-agent", action="store_true", help="approve in the agent's own prompt instead of `secondkey approve`")
+    p.add_argument("--agent", action="append", choices=["claude-code", "cursor"],
+                   help="which agent to hook (repeatable; default claude-code)")
     p.set_defaults(fn=cmd_init)
 
     p = sub.add_parser("check", help="show what SecondKey would decide for a command (nothing is run)")
@@ -378,7 +506,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_exec)
 
     p = sub.add_parser("hook", help="agent hook entry point (used by `init`)")
-    p.add_argument("agent", choices=["claude-code"])
+    p.add_argument("agent", choices=["claude-code", "cursor"])
     p.set_defaults(fn=cmd_hook)
 
     p = sub.add_parser("pending", help="list commands waiting for approval")
@@ -409,6 +537,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("snapshots", help="list restore points")
     p.add_argument("-n", "--limit", type=int, default=30)
+    p.add_argument("--all", action="store_true", help="include pruned ones")
     p.set_defaults(fn=cmd_snapshots)
 
     p = sub.add_parser("undo", help="restore a snapshot (or every snapshot of a request)")
@@ -420,6 +549,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yes", "-y", action="store_true", help="don't ask for confirmation")
     p.add_argument("--dry-run", action="store_true", help="only show what would happen")
     p.set_defaults(fn=cmd_undo)
+
+    p = sub.add_parser("prune", help="delete old restore points (also runs automatically once a day)")
+    p.add_argument("--older-than", type=float, metavar="DAYS", help="default: snapshots.retention_days")
+    p.add_argument("--max-mb", type=float, help="default: snapshots.max_total_mb")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(fn=cmd_prune)
+
+    p = sub.add_parser("proxy", help="run a Postgres proxy that gates every query (scripts, ORMs, migrations)")
+    p.add_argument("--listen", default="127.0.0.1:6543", help="host:port to listen on (default 127.0.0.1:6543)")
+    p.add_argument("--upstream", required=True, help="the real database: host:port or a unix socket path")
+    p.add_argument("--upstream-ssl", action="store_true", help="use TLS to the upstream database (Python 3.11+)")
+    p.add_argument("--wait", type=float, default=0, help="seconds to wait for an approval before failing the query")
+    p.add_argument("--snapshot-dsn", help="connection string pg_dump should use (default: upstream + client's db/user)")
+    p.set_defaults(fn=lambda a: __import__("secondkey.proxy", fromlist=["run_proxy"]).run_proxy(
+        __import__("secondkey.proxy", fromlist=["config_from_args"]).config_from_args(a)))
+
+    p = sub.add_parser("doctor", help="check the installation, hooks, tools and state")
+    p.set_defaults(fn=cmd_doctor)
 
     p = sub.add_parser("policy", help="show the effective policy")
     p.add_argument("--policy")

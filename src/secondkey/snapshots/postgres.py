@@ -77,14 +77,67 @@ def _referencing_fks(conn: dict[str, str], table: str) -> list[dict[str, str]]:
     return [{"table": r[0], "name": r[1], "def": r[2]} for r in rows if len(r) == 3]
 
 
+def _size_bytes(conn: dict[str, str], tables: list[str]) -> int:
+    if tables == ["*"]:
+        rows = psql(conn, "SELECT pg_database_size(current_database())", read_only=True)
+    else:
+        parts = " + ".join(f"COALESCE(pg_total_relation_size(to_regclass({_quote_literal(t)})), 0)" for t in tables)
+        rows = psql(conn, f"SELECT {parts}", read_only=True)
+    return int(rows[-1][0]) if rows else 0
+
+
+def _neon_bin() -> str:
+    import shutil
+    for b in ("neonctl", "neon"):
+        if shutil.which(b):
+            return b
+    raise SnapshotUnavailable("postgres_strategy is neon but neonctl isn't installed (npm i -g neonctl)")
+
+
+def _neon_settings(policy: Policy) -> dict[str, str]:
+    project = str(policy.snapshots.get("neon_project_id") or os.environ.get("NEON_PROJECT_ID") or "")
+    branch = str(policy.snapshots.get("neon_branch") or os.environ.get("NEON_BRANCH") or "")
+    if not project or not branch:
+        raise SnapshotUnavailable("set snapshots.neon_project_id and snapshots.neon_branch (or NEON_PROJECT_ID / NEON_BRANCH)")
+    return {"project": project, "branch": branch}
+
+
 class PostgresProvider(Provider):
     name = "postgres"
+
+    def _strategy(self, policy: Policy) -> str:
+        return str(policy.snapshots.get("postgres_strategy", "dump"))
+
+    def _check_size(self, conn: dict[str, str], tables: list[str], policy: Policy) -> int:
+        size = _size_bytes(conn, tables)
+        limit = int(float(policy.snapshots.get("postgres_max_dump_mb", 2048)) * 1024 * 1024)
+        if limit and size > limit:
+            from ..util import human_size
+            raise SnapshotUnavailable(f"{'database' if tables == ['*'] else 'tables'} are {human_size(size)}, over the "
+                                      f"{human_size(limit)} dump limit. Use postgres_strategy: neon, or raise postgres_max_dump_mb")
+        return size
 
     def plan(self, action: Action, policy: Policy) -> list[str]:
         t = action.target
         conn, tables, kind = t.get("conn") or {}, t.get("tables") or [], t.get("kind")
         if not tables:
             raise SnapshotUnavailable("no table names found in the statement")
+        strategy = self._strategy(policy)
+        if strategy == "neon":
+            ns = _neon_settings(policy)
+            _neon_bin()
+        if tables == ["*"]:
+            from ..util import human_size
+            size = _size_bytes(conn, tables)
+            n = psql(conn, "SELECT count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')", read_only=True)
+            lines = [f"whole database: {int(n[-1][0])} tables, {human_size(size)}"]
+            if strategy == "neon":
+                lines.append(f"restore point: Neon branch {ns['branch']} point-in-time")
+            else:
+                self._check_size(conn, tables, policy)
+            return lines
+        if strategy != "neon":
+            self._check_size(conn, [tb for tb in tables if _exists(conn, tb)] or tables, policy)
         lines = []
         for table in tables:
             if not _exists(conn, table):
@@ -108,6 +161,25 @@ class PostgresProvider(Provider):
     def take(self, action: Action, dest: Path, policy: Policy) -> tuple[str, dict[str, Any]]:
         t = action.target
         conn, tables = t.get("conn") or {}, t.get("tables") or []
+        if self._strategy(policy) == "neon":
+            import datetime as _dt
+            ns = _neon_settings(policy)
+            _neon_bin()
+            ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            counts = {tb: _count(conn, tb) for tb in tables if tb != "*" and _exists(conn, tb)}
+            return (f"Neon {ns['branch']} @ {ts[:19]}Z", {"strategy": "neon", **ns, "timestamp": ts, "conn": conn,
+                                                         "tables": tables, "counts": counts, "statement": t.get("sql")})
+        if tables == ["*"]:
+            size = self._check_size(conn, tables, policy)
+            dump = dest / "dump.pgc"
+            try:
+                run(["pg_dump", "-Fc", "-w", "-f", str(dump), *conn_args(conn)], timeout=3600)
+            except CommandError as e:
+                raise SnapshotUnavailable(f"pg_dump failed: {e.stderr.strip()[:300]}") from e
+            from ..util import human_size
+            return f"whole database ({human_size(size)})", {"conn": conn, "tables": ["*"], "counts": {}, "fks": [],
+                                                            "kind": t.get("kind"), "bytes": dump.stat().st_size}
+        self._check_size(conn, [tb for tb in tables if _exists(conn, tb)] or tables, policy)
         present = [tb for tb in tables if _exists(conn, tb)]
         if not present:
             raise NothingToProtect("none of the tables exist, so there is nothing to protect")
@@ -138,6 +210,13 @@ class PostgresProvider(Provider):
 
     def describe_restore(self, snap: Snapshot, mode: str | None = None) -> list[str]:
         m = snap.meta
+        if m.get("strategy") == "neon":
+            return [f"rewind Neon branch {m['branch']} to {m['timestamp']} (every database on that branch)",
+                    f"the current state is kept as branch {m['branch']}_before_{snap.id}",
+                    "everything written to the branch after that moment is rolled back"]
+        if m.get("tables") == ["*"]:
+            return ["restore the whole database from the snapshot (drop and recreate every object in the dump)",
+                    "everything written to the database after the snapshot will be lost"]
         try:
             chosen, present = self._mode(snap, mode)
         except SnapshotUnavailable as e:
@@ -162,7 +241,26 @@ class PostgresProvider(Provider):
 
     def restore(self, snap: Snapshot, mode: str | None = None, force: bool = False) -> list[str]:
         m = snap.meta
+        if m.get("strategy") == "neon":
+            keep = f"{m['branch']}_before_{snap.id}"
+            try:
+                run([_neon_bin(), "branches", "restore", m["branch"], f"^self@{m['timestamp']}",
+                     "--preserve-under-name", keep, "--project-id", m["project"]], timeout=600)
+            except CommandError as e:
+                raise RestoreError(f"neon restore failed: {e.stderr.strip()[:400]}") from e
+            out = [f"Neon branch {m['branch']} rewound to {m['timestamp']}", f"previous state kept as branch {keep}"]
+            for tb, n in (m.get("counts") or {}).items():
+                got = _count(m["conn"], tb)
+                out.append(f"{'verified' if got == n else 'WARNING'} {tb}: {got:,} rows (snapshot had {n:,})")
+            return out
         conn, dump = m["conn"], str(Path(snap.path) / "dump.pgc")
+        if m.get("tables") == ["*"]:
+            try:
+                run(["pg_restore", "--single-transaction", "--exit-on-error", "--clean", "--if-exists", "-w",
+                     *conn_args(conn), dump], timeout=7200)
+            except CommandError as e:
+                raise RestoreError(f"pg_restore failed, nothing was changed: {e.stderr.strip()[:400]}") from e
+            return ["whole database restored from the snapshot"]
         chosen, present = self._mode(snap, mode)
         out = []
         env = dict(os.environ)

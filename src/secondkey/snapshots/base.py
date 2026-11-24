@@ -42,3 +42,7 @@ class Provider:
     def restore(self, snap: Snapshot, mode: str | None = None, force: bool = False) -> list[str]:
         """Put things back. Returns lines describing what was done."""
         raise NotImplementedError
+
+    def cleanup(self, snap: Snapshot) -> None:
+        """Release anything held outside the snapshot folder (e.g. git refs) when pruning."""
+        return None

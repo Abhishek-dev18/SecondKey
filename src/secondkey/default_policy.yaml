@@ -23,6 +23,10 @@ rules:
   # Destructive and undoable: snapshot, then wait for the second key.
   - match: ["sql.drop", "sql.truncate", "sql.delete", "sql.update", "sql.alter", "sql.drop_other", "sql.other"]
     action: ask
+  # Migration tools that drop or roll back schema (alembic downgrade, prisma migrate reset, rails db:drop ...).
+  # With a Postgres DATABASE_URL in the environment, the whole database is snapshotted.
+  - match: ["db.reset", "db.migrate_down"]
+    action: ask
   - match: ["fs.delete_recursive", "git.force_push", "git.delete_remote_branch", "git.reset_hard",
             "git.clean", "git.branch_delete", "git.discard", "git.rewrite"]
     action: ask
@@ -69,5 +73,13 @@ notify:
   slack_webhook: "${SECONDKEY_SLACK_WEBHOOK}"
 
 snapshots:
+  # Delete restore points older than this (the newest one is always kept).
+  retention_days: 14
+  # Keep total snapshot storage under this; the oldest go first.
+  max_total_mb: 5120
   # Skip file snapshots bigger than this (they'll be reported as not protected).
   max_file_snapshot_mb: 500
+  # Postgres: dumps larger than this are refused (use strategy: neon for big databases).
+  postgres_max_dump_mb: 2048
+  # Postgres snapshot method: dump (pg_dump) or neon (instant branch via neonctl).
+  postgres_strategy: dump
