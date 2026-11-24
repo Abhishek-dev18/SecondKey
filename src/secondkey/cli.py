@@ -62,7 +62,22 @@ def project_root(start: str) -> Path:
 # ------------------------------------------------------------------ init
 
 HOOK_MARK = "secondkey hook claude-code"
-_HOOK_RE = re.compile(r"secondkey(?:\.exe)?[\"']?\s+hook\s+(claude-code|cursor)\b", re.I)
+_HOOK_RE = re.compile(r"secondkey(?:\.exe)?\\?[\"']?\s+hook\s+(claude-code|cursor)\b", re.I)
+
+
+def hook_installed(path: Path, agent: str) -> bool:
+    """Read an agent's hook config as JSON and look for our hook command."""
+    try:
+        data = json.loads(path.read_text() or "{}")
+    except (OSError, json.JSONDecodeError):
+        return False
+    groups = (data.get("hooks") or {}).values()
+    for entries in groups:
+        for e in entries or []:
+            cmds = [h.get("command", "") for h in e.get("hooks", [])] if "hooks" in e else [e.get("command", "")]
+            if any(is_secondkey_hook(c, agent) for c in cmds):
+                return True
+    return False
 
 
 def is_secondkey_hook(command: str, agent: str) -> bool:
@@ -461,7 +476,7 @@ def cmd_doctor(a: argparse.Namespace) -> int:
                        ("Cursor (user)", Path.home() / ".cursor" / "hooks.json")):
         try:
             agent = "cursor" if "Cursor" in name else "claude-code"
-            if path.exists() and is_secondkey_hook(path.read_text(), agent):
+            if path.exists() and hook_installed(path, agent):
                 hooks.append(name)
         except OSError:
             pass
