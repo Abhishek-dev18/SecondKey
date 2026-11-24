@@ -142,7 +142,8 @@ def cmd_init(a: argparse.Namespace) -> int:
     example = 'psql $DB -c "DROP TABLE x"'
     print(f"  {bold('rm -rf ./some-folder')}  or  {bold(example)}")
     print(f"and approve with {bold('secondkey pending')} / {bold('secondkey approve <id>')}.")
-    print(f"Preview any command first: {bold('secondkey check \"<command>\"')}")
+    preview = 'secondkey check "<command>"'
+    print(f"Preview any command first: {bold(preview)}")
     return 0
 
 
