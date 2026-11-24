@@ -6,6 +6,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -61,6 +62,13 @@ def project_root(start: str) -> Path:
 # ------------------------------------------------------------------ init
 
 HOOK_MARK = "secondkey hook claude-code"
+_HOOK_RE = re.compile(r"secondkey(?:\.exe)?[\"']?\s+hook\s+(claude-code|cursor)\b", re.I)
+
+
+def is_secondkey_hook(command: str, agent: str) -> bool:
+    """Recognise our hook however the path was written (secondkey, secondkey.EXE, quoted, python -m)."""
+    m = _HOOK_RE.search(str(command or ""))
+    return bool(m and m.group(1).lower() == agent)
 
 
 def hook_command(agent: str) -> str:
@@ -89,16 +97,25 @@ def install_claude_hook(settings_path: Path) -> str:
             raise SystemExit(f"{settings_path} is not valid JSON ({e}); fix it and re-run init.")
     hooks = data.setdefault("hooks", {})
     pre = hooks.setdefault("PreToolUse", [])
+    command = hook_command("claude-code")
+    status = None
     for group in pre:
         for h in group.get("hooks", []):
-            if HOOK_MARK in str(h.get("command", "")):
-                return "already installed"
-    command = hook_command("claude-code")
-    pre.append({"matcher": "*", "hooks": [{"type": "command", "command": command, "timeout": 900}]})
+            if is_secondkey_hook(h.get("command", ""), "claude-code"):
+                if h.get("command") == command:
+                    status = status or "already installed"
+                else:
+                    h["command"] = command  # repair an old or mis-quoted path
+                    status = "updated"
+    if status == "already installed":
+        return status
+    if status is None:
+        pre.append({"matcher": "*", "hooks": [{"type": "command", "command": command, "timeout": 900}]})
+        status = "installed"
     tmp = settings_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n")
     tmp.replace(settings_path)
-    return "installed"
+    return status
 
 
 CURSOR_EVENTS = ("beforeShellExecution", "beforeReadFile", "beforeMCPExecution")
@@ -118,7 +135,12 @@ def install_cursor_hook(hooks_path: Path) -> str:
     added = 0
     for ev in CURSOR_EVENTS:
         entries = hooks.setdefault(ev, [])
-        if not any("secondkey hook cursor" in str(e.get("command", "")) for e in entries):
+        mine = [e for e in entries if is_secondkey_hook(e.get("command", ""), "cursor")]
+        for e in mine:
+            if e.get("command") != command:
+                e["command"] = command
+                added += 1
+        if not mine:
             entries.append({"command": command, "timeout": 900})
             added += 1
     tmp = hooks_path.with_suffix(".json.tmp")
@@ -425,8 +447,12 @@ def cmd_doctor(a: argparse.Namespace) -> int:
         problems += 1
         p = None
     h = home()
-    mode = h.stat().st_mode & 0o777
-    line(ok_mark if not mode & 0o077 else warn_mark, "state directory", f"{h} (permissions {oct(mode)[2:]})")
+    if os.name == "nt":
+        # POSIX mode bits mean nothing on Windows; the user profile's ACLs keep it private.
+        line(ok_mark, "state directory", f"{h} (inside your Windows user profile)")
+    else:
+        mode = h.stat().st_mode & 0o777
+        line(ok_mark if not mode & 0o077 else warn_mark, "state directory", f"{h} (permissions {oct(mode)[2:]})")
     root = project_root(a.cwd)
     hooks = []
     for name, path in (("Claude Code (project)", root / ".claude" / "settings.json"),
@@ -434,7 +460,8 @@ def cmd_doctor(a: argparse.Namespace) -> int:
                        ("Cursor (project)", root / ".cursor" / "hooks.json"),
                        ("Cursor (user)", Path.home() / ".cursor" / "hooks.json")):
         try:
-            if path.exists() and "secondkey hook" in path.read_text():
+            agent = "cursor" if "Cursor" in name else "claude-code"
+            if path.exists() and is_secondkey_hook(path.read_text(), agent):
                 hooks.append(name)
         except OSError:
             pass
