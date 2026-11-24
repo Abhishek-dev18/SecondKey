@@ -307,3 +307,27 @@ def test_missing_tool_hint(project, monkeypatch):
     with pytest.raises(CommandError) as e:
         run(["pg_dump", "--version"])
     assert "install the PostgreSQL client tools" in str(e.value)
+
+
+@pytest.mark.parametrize("cmd,agent,ok", [
+    ("/usr/local/bin/secondkey hook claude-code", "claude-code", True),
+    ('"C:/Users/abhis/.local/bin/secondkey.EXE" hook claude-code', "claude-code", True),
+    ("'C:\\Users\\abhis\\.local\\bin\\secondkey.EXE' hook claude-code", "claude-code", True),
+    ('"C:/Python312/python.exe" -m secondkey hook cursor', "cursor", True),
+    ("secondkey hook cursor", "claude-code", False),
+    ("prettier --write", "claude-code", False),
+])
+def test_hook_detection(cmd, agent, ok):
+    from secondkey.cli import is_secondkey_hook
+    assert is_secondkey_hook(cmd, agent) is ok
+
+
+def test_init_repairs_old_windows_hook_path(project):
+    (project / ".git").mkdir()
+    settings = project / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    old = "'C:\\Users\\abhis\\.local\\bin\\secondkey.EXE' hook claude-code"
+    settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": old}]}]}}))
+    assert cli(["-C", str(project), "init"]) == 0
+    cmds = [h["command"] for g in json.loads(settings.read_text())["hooks"]["PreToolUse"] for h in g["hooks"]]
+    assert len(cmds) == 1 and cmds[0] != old and "hook claude-code" in cmds[0]
