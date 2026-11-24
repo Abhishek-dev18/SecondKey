@@ -19,7 +19,7 @@ def home() -> Path:
     if not p.exists():
         p.mkdir(parents=True, exist_ok=True)
     try:
-        if p.stat().st_mode & 0o077:
+        if os.name != "nt" and p.stat().st_mode & 0o077:
             p.chmod(0o700)  # snapshots hold real data: owner only
     except OSError:
         pass

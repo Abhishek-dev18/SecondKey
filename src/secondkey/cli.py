@@ -425,8 +425,12 @@ def cmd_doctor(a: argparse.Namespace) -> int:
         problems += 1
         p = None
     h = home()
-    mode = h.stat().st_mode & 0o777
-    line(ok_mark if not mode & 0o077 else warn_mark, "state directory", f"{h} (permissions {oct(mode)[2:]})")
+    if os.name == "nt":
+        # POSIX mode bits mean nothing on Windows; the user profile's ACLs keep it private.
+        line(ok_mark, "state directory", f"{h} (inside your Windows user profile)")
+    else:
+        mode = h.stat().st_mode & 0o777
+        line(ok_mark if not mode & 0o077 else warn_mark, "state directory", f"{h} (permissions {oct(mode)[2:]})")
     root = project_root(a.cwd)
     hooks = []
     for name, path in (("Claude Code (project)", root / ".claude" / "settings.json"),
