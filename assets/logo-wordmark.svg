@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 48" width="220" height="48" role="img" aria-label="SecondKey">
+  <circle cx="15" cy="24" r="9" fill="none" stroke="#f2efe8" stroke-width="2.5"/>
+  <rect x="13.5" y="18" width="3" height="12" rx="1.5" fill="#f2efe8"/>
+  <circle cx="33" cy="24" r="9" fill="none" stroke="#ff5a1f" stroke-width="2.5"/>
+  <rect x="27" y="22.5" width="12" height="3" rx="1.5" fill="#ff5a1f"/>
+  <text x="52" y="31.5" font-family="Geist, Inter, system-ui, sans-serif" font-size="24" font-weight="600" letter-spacing="-0.6" fill="#f2efe8">second<tspan fill="#ff5a1f">key</tspan></text>
+</svg>

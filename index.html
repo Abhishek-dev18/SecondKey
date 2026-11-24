@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>secondkey · the second key for every agent action</title>
+<meta name="description" content="SecondKey sits between AI agents and production. Safe commands pass, destructive ones are snapshotted and wait for a human, and a wrong yes can be undone.">
+<meta name="theme-color" content="#0e0d0b">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e0d0b;--panel:#12110f;--chip:#1c1b18;--line:#2a2823;--line2:#22201c;--ink:#f2efe8;--ink2:#e4e0d6;--mute:#b8b3a8;--dim:#8f8a80;--hot:#ff5a1f;--hot2:#ff7a45;--ok:#8fd1a5;--bad:#ff8a80}
+*{box-sizing:border-box;min-width:0}
+html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 Geist,system-ui,sans-serif;overflow-x:clip}
+a{color:var(--hot2)}a:hover{color:#ffa27d}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.wrap{max-width:1240px;margin:0 auto;padding-left:24px;padding-right:24px}
+button,input{font:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--hot);outline-offset:2px}
+.eyebrow{font-family:'Geist Mono',monospace;font-size:13px;color:var(--hot2);margin-bottom:12px}
+h2{font-size:clamp(30px,4vw,52px);line-height:1.04;letter-spacing:-.04em;margin:0 0 28px;font-weight:600;text-wrap:balance}
+.btn{display:inline-flex;align-items:center;min-height:50px;padding:0 22px;border-radius:999px;text-decoration:none;font-weight:600}
+.btn.hot{background:var(--hot);color:#120a05}.btn.hot:hover{color:#120a05;background:#ff6c35}
+.btn.ghost{border:1px solid #4a463e;color:var(--ink);font-weight:500}.btn.ghost:hover{color:var(--ink);border-color:var(--mute)}
+header{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;padding-top:22px;padding-bottom:22px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink)}
+.brand span{font-weight:600;font-size:22px;letter-spacing:-.03em}.brand b{color:var(--hot);font-weight:600}
+nav{display:flex;flex-wrap:wrap;gap:6px 22px;align-items:center;font-size:15px}
+nav a{color:#c9c4b8;text-decoration:none}nav a:hover{color:var(--ink)}
+nav a.cta{background:var(--ink);color:var(--bg);padding:0 16px;border-radius:999px;min-height:44px;display:inline-flex;align-items:center;font-weight:500}
+h1{font-size:clamp(44px,7.4vw,104px);line-height:.98;letter-spacing:-.05em;margin:0 0 26px;font-weight:600}
+h1 span{color:var(--hot)}
+.lede{display:flex;flex-wrap:wrap;gap:20px 48px;align-items:flex-end;justify-content:space-between}
+.lede p{margin:0;font-size:19px;color:var(--mute);max-width:600px;flex:1 1 380px}
+.lede div{display:flex;flex-wrap:wrap;gap:10px}
+.gatebar{display:flex;flex-wrap:wrap;gap:10px 24px;align-items:baseline;justify-content:space-between;margin-bottom:12px}
+.stats{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font-family:'Geist Mono',monospace;font-size:13px;color:var(--mute)}
+.stats b{color:var(--ink);font-weight:500}.stats b.h{color:var(--hot2)}
+.pill{min-height:44px;padding:0 14px;border-radius:999px;border:1px solid #4a463e;background:transparent;color:var(--ink)}
+.gate{position:relative;height:352px;border:1px solid var(--line);border-radius:18px;overflow:hidden;background:var(--panel)}
+.gate .line{position:absolute;left:50%;top:0;bottom:0;width:2px;background:var(--hot)}
+.gate .lbl{position:absolute;bottom:10px;font-family:'Geist Mono',monospace;font-size:12px;color:var(--dim)}
+.chip{position:absolute;height:52px;display:flex;align-items:center;gap:6px;padding:0 7px 0 12px;border-radius:10px;border:1px solid}
+.chip .c{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'Geist Mono',monospace;font-size:13px}
+.chip .t{flex:none;font-family:'Geist Mono',monospace;font-size:12px;opacity:.85}
+.chip button{flex:none;font-size:13px;font-weight:600;min-height:38px;padding:0 9px;border-radius:8px;border:0}
+.chip .ok{background:#120a05;color:#ffd9c9}.chip .no{background:#fff4ee;color:#120a05}
+.try{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px}
+.try label{font-family:'Geist Mono',monospace;font-size:13px;color:var(--mute);flex:none}
+.try input{flex:1 1 260px;font-family:'Geist Mono',monospace;font-size:16px;min-height:48px;padding:0 16px;border-radius:12px;border:1px solid #4a463e;background:var(--panel);color:var(--ink)}
+.try button{flex:none;font-weight:600;font-size:15px;min-height:48px;padding:0 18px;border-radius:12px;border:0;background:var(--ink);color:var(--bg)}
+.try .hint{flex:1 1 100%;font-size:13px;color:var(--dim)}
+.log{margin-top:14px;border:1px solid var(--line);border-radius:14px;padding:6px 0;background:var(--panel)}
+.log .hd{padding:8px 16px;font-family:'Geist Mono',monospace;font-size:13px;color:var(--dim)}
+.ev{display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center;padding:8px 16px;border-top:1px solid var(--line2);font-family:'Geist Mono',monospace;font-size:13px}
+.ev .tm{color:var(--dim);flex:none}.ev .vb{flex:none;width:76px}.ev .cm{flex:1 1 220px;color:var(--ink2);overflow-wrap:anywhere}.ev .nt{color:var(--dim);flex:none}
+.ev button{flex:none;min-height:36px;padding:0 12px;border-radius:999px;border:1px solid var(--hot);background:transparent;color:var(--hot2)}
+.note{margin:10px 0 0;font-size:13px;color:var(--dim)}
+section{padding-top:72px;padding-bottom:40px}
+.split{display:flex;flex-wrap:wrap;gap:32px 64px}
+.premise{flex:1 1 300px}.premise p{margin:0;font-size:clamp(24px,2.6vw,32px);line-height:1.25;letter-spacing:-.02em;font-weight:500}
+.beliefs{flex:1.3 1 420px}
+.belief{padding:16px 0;border-top:1px solid var(--line)}.belief:last-child{border-bottom:1px solid var(--line)}
+.belief div:first-child{font-size:20px;font-weight:500;margin-bottom:4px}.belief div:last-child{color:var(--mute);font-size:16px}
+.rec{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px 24px;padding:18px 0;border-bottom:1px solid var(--line)}
+.rec div:first-child{font-family:'Geist Mono',monospace;color:var(--dim);font-size:14px}.rec div:nth-child(2){font-weight:500}.rec div:last-child{color:var(--mute);font-size:15px}
+.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.fig{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:18px;display:flex;flex-direction:column;gap:12px}
+.fig .cap{font-family:'Geist Mono',monospace;font-size:13px;color:var(--dim)}
+.fig pre{margin:0;font-family:'Geist Mono',monospace;font-size:14px;line-height:1.8;overflow-x:auto;color:var(--ink2)}
+.fig .d{font-size:15px;color:var(--mute)}
+.slack{background:#f7f5f0;color:#141310;border-radius:10px;padding:14px;font-size:15px}
+.slack code{font-family:'Geist Mono',monospace;background:#ffe6da;padding:1px 6px;border-radius:4px;font-size:13px}
+.slack .b{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.slack .b span{border-radius:6px;padding:6px 14px;font-weight:600;font-size:14px;color:#fff}
+.install{border:1px solid var(--line);border-radius:18px;padding:clamp(20px,3vw,36px);display:flex;flex-wrap:wrap;gap:24px 48px;align-items:center;justify-content:space-between;background:var(--panel)}
+.install .tx{flex:1 1 320px}.install .big{font-size:clamp(24px,2.6vw,34px);line-height:1.15;letter-spacing:-.03em;font-weight:600}
+.install .code{flex:1 1 420px;background:#0b0a09;border:1px solid var(--line);border-radius:14px;padding:16px 16px 16px 20px;display:flex;gap:12px;align-items:center}
+.install pre{flex:1 1 auto;margin:0;font-family:'Geist Mono',monospace;font-size:15px;line-height:1.9;overflow-x:auto;color:var(--ink2)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:16px}
+table{width:100%;min-width:640px;border-collapse:collapse;font-size:15px}
+th{text-align:left;color:var(--dim);font-size:13px;font-family:'Geist Mono',monospace;font-weight:400;padding:14px 12px}
+td{padding:14px 12px;border-top:1px solid var(--line)}
+th:first-child,td:first-child{padding-left:18px}
+.y{color:var(--ok)}.n{color:var(--dim)}.x{color:var(--bad)}
+tr.us{background:#1d130d}tr.us td:first-child{color:var(--hot2);font-weight:600}
+.price{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));border-top:1px solid var(--line)}
+.price>div{padding:22px 20px 22px 0;border-bottom:1px solid var(--line)}
+.price .p{font-size:40px;font-weight:600;letter-spacing:-.03em;white-space:nowrap}.price .p small{font-size:15px;font-weight:400;color:var(--dim)}
+.price .f{font-size:15px;color:var(--mute)}
+details{border-bottom:1px solid var(--line);padding:4px 0}
+summary{cursor:pointer;padding:14px 0;font-size:19px;font-weight:500;min-height:44px}
+details p{margin:0 0 16px;color:var(--mute)}
+.wl{background:var(--hot);color:#120a05;margin-top:56px}
+.wl .wrap{padding-top:88px;padding-bottom:88px;display:flex;flex-wrap:wrap;gap:32px;align-items:flex-end;justify-content:space-between}
+.wl h2{flex:1 1 520px;font-size:clamp(36px,5.6vw,80px);line-height:.98;letter-spacing:-.05em;margin:0}
+.wl form{flex:1 1 360px;display:flex;flex-direction:column;gap:8px}
+.wl label{font-size:15px;font-weight:500}
+.wl .r{display:flex;flex-wrap:wrap;gap:10px}
+.wl input{flex:1 1 220px;font-size:16px;min-height:52px;padding:0 18px;border-radius:999px;border:0;background:#fff4ee;color:#120a05}
+.wl button{font-weight:600;font-size:16px;min-height:52px;padding:0 24px;border-radius:999px;border:0;background:#120a05;color:#fff4ee}
+.wl .msg{font-size:14px;font-weight:500;min-height:1.4em}
+footer{display:flex;flex-wrap:wrap;gap:24px 48px;justify-content:space-between;font-size:14px;color:var(--dim);padding-top:40px;padding-bottom:48px}
+footer div{flex:1 1 300px}
+@media (max-width:600px){.gate .prod{display:none}.chip .t{max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.chip{transition:none!important}}
+</style>
+</head>
+<body>
+
+<header class="wrap">
+<a class="brand" href="#top" aria-label="SecondKey home">
+<svg width="30" height="30" viewBox="0 0 48 48" aria-hidden="true"><circle cx="15" cy="24" r="9" fill="none" stroke="#f2efe8" stroke-width="2.5"/><rect x="13.5" y="18" width="3" height="12" rx="1.5" fill="#f2efe8"/><circle cx="33" cy="24" r="9" fill="none" stroke="#ff5a1f" stroke-width="2.5"/><rect x="27" y="22.5" width="12" height="3" rx="1.5" fill="#ff5a1f"/></svg>
+<span>second<b>key</b></span>
+</a>
+<nav aria-label="Main">
+<a href="#beliefs">beliefs</a>
+<a href="#product">product</a>
+<a href="#pricing">pricing</a>
+<a href="https://github.com/Abhishek-dev18/SecondKey">github</a>
+<a class="cta" href="#waitlist">get early access</a>
+</nav>
+</header>
+
+<main>
+<section id="top" class="wrap" style="padding-top:40px;padding-bottom:24px">
+<h1>agents hold the first key.<br><span>you hold the second.</span></h1>
+<div class="lede">
+<p>SecondKey sits between your AI agents and production. Safe commands pass straight through. Destructive ones stop, get snapshotted, and wait for a human to turn the second key. And if that human says yes by mistake, it can be undone.</p>
+<div><a class="btn hot" href="#waitlist">get early access</a><a class="btn ghost" href="#product">see the product</a></div>
+</div>
+</section>
+
+<section aria-label="Live gate demo" class="wrap" style="padding-top:36px;padding-bottom:16px">
+<div class="gatebar">
+<div class="mono" style="font-size:13px;color:var(--dim)">fig 0.1 · the gate, live. click a held command to decide.</div>
+<div class="stats">
+<span>passed <b id="s-pass">0</b></span>
+<span>held <b class="h" id="s-held">0</b></span>
+<span>approved <b id="s-appr">0</b></span>
+<span>denied <b id="s-deny">0</b></span>
+<button class="pill" id="play" type="button">pause</button>
+</div>
+</div>
+<div class="gate" id="gate">
+<div class="line" aria-hidden="true"></div>
+<div class="lbl" style="left:14px">agents →</div>
+<div class="lbl" style="left:calc(50% + 10px);color:var(--hot2)">secondkey</div>
+<div class="lbl prod" style="right:14px">→ production</div>
+</div>
+<form class="try" id="try">
+<label for="try-cmd">agent$</label>
+<input id="try-cmd" type="text" autocomplete="off" spellcheck="false" placeholder="type any command, e.g. rm -rf ./data">
+<button type="submit">send through the gate</button>
+<div class="hint" id="try-hint" aria-live="polite">Try DROP TABLE users, git push --force, cat ~/.aws/credentials or ls -la.</div>
+</form>
+<div class="log">
+<div class="hd">fig 0.2 · audit log</div>
+<div id="events" aria-live="polite"></div>
+</div>
+<p class="note">Simulation with sample commands. Nothing real is touched.</p>
+</section>
+
+<section id="beliefs" class="wrap" style="padding-top:96px">
+<div class="split">
+<div class="premise">
+<div class="eyebrow">premise</div>
+<p>agents should be allowed to do real work. they should never be allowed to do irreversible work alone.</p>
+</div>
+<div class="beliefs">
+<div class="eyebrow">beliefs</div>
+<div class="belief"><div>enforce in the path, not in the prompt.</div><div>A code freeze written in instructions didn't stop Replit's agent. A gate the command has to pass through does.</div></div>
+<div class="belief"><div>judge the action, not the agent.</div><div>The same agent is trusted to read a table and stopped before it drops one.</div></div>
+<div class="belief"><div>snapshot before you ask.</div><div>Humans make mistakes too. A restore point taken before the command makes even a wrong yes reversible.</div></div>
+<div class="belief"><div>two keys for anything irreversible.</div><div>The two-person rule protects launch codes and bank vaults. Production deserves the same.</div></div>
+</div>
+</div>
+</section>
+
+<section aria-label="The record" class="wrap" style="padding-top:56px">
+<div class="eyebrow">the record</div>
+<h2 style="max-width:820px">this keeps happening, and none of it needed a second key.</h2>
+<div style="border-top:1px solid var(--line)">
+<div class="rec"><div>jul 2025 · replit</div><div>production database deleted</div><div>during an explicit code freeze</div></div>
+<div class="rec"><div>feb 2026 · datatalks.club</div><div>terraform destroy on live infra</div><div>one teardown command, run by an agent</div></div>
+<div class="rec"><div>apr 2026 · pocketos</div><div>database and backups gone in 9 seconds</div><div>via a token unrelated to the task</div></div>
+</div>
+</section>
+
+<section id="product" class="wrap">
+<div class="eyebrow">product</div>
+<h2 style="max-width:860px">one policy file. one slack card. one undo command.</h2>
+<div class="figs">
+<div class="fig">
+<div class="cap">fig 1.1 · policy.yaml</div>
+<pre><span class="y">allow</span>: [SELECT, git commit, terraform plan]
+<span style="color:var(--hot2)">ask</span>:   [DROP, DELETE, terraform destroy,
+        kubectl delete, git push --force]
+<span class="x">deny</span>:  [read .env, read ~/.aws]
+<span class="n">snapshot</span>: before ask
+<span class="n">budget</span>: $20/session</pre>
+<div class="d">Allow, ask or deny, like IAM for agent actions.</div>
+</div>
+<div class="fig">
+<div class="cap">fig 1.2 · #prod-approvals</div>
+<div class="slack">
+<div style="font-weight:600;margin-bottom:4px">secondkey <span style="font-weight:400;color:#6b675f;font-size:13px">· now</span></div>
+<div>Claude Code wants to run <code>DROP TABLE users</code></div>
+<div style="color:#4a463e;font-size:14px;margin-top:8px">prod-db · 48,210 rows · snapshot saved</div>
+<div class="b"><span style="background:#1f7a4d">Approve</span><span style="background:#b42318">Deny</span></div>
+</div>
+<div class="d">Command, target and blast radius, with a restore point already taken.</div>
+</div>
+<div class="fig">
+<div class="cap">fig 1.3 · terminal</div>
+<pre><span class="n">$</span> secondkey undo snap_91c2
+<span class="y">restoring users … 48,210 rows</span>
+<span class="y">checksum ok · 6.2s</span></pre>
+<div class="d">pg_dump or Neon branch for Postgres, state backup for Terraform, saved refs for git.</div>
+</div>
+</div>
+</section>
+
+<section aria-label="Install" class="wrap" style="padding-top:32px;padding-bottom:56px">
+<div class="install">
+<div class="tx">
+<div class="eyebrow" style="margin-bottom:10px">install</div>
+<div class="big">two commands. your next agent session needs a second key.</div>
+<div style="color:var(--mute);font-size:16px;margin-top:8px">init finds Claude Code or Cursor, adds the hook and writes a default policy. Available with early access.</div>
+</div>
+<div class="code">
+<pre><span class="n">$</span> pipx install secondkey
+<span class="n">$</span> secondkey init</pre>
+<button class="pill" id="copy" type="button">copy</button>
+</div>
+</div>
+</section>
+
+<section aria-label="Comparison" class="wrap" style="padding-top:56px">
+<div class="eyebrow">compared</div>
+<h2 style="max-width:880px">others ask first or restore later. secondkey does both, in that order.</h2>
+<div class="tbl">
+<table>
+<thead><tr><th>approach</th><th>stops it before it runs</th><th>restore point first</th><th>works across your stack</th></tr></thead>
+<tbody>
+<tr><td>rules in the prompt</td><td class="x">no, agents can ignore them</td><td class="n">no</td><td class="n">no</td></tr>
+<tr><td>approval-only gates</td><td>yes</td><td class="n">no</td><td>yes</td></tr>
+<tr><td>enterprise backup rewind</td><td class="n">no, it restores after</td><td>from backups</td><td>yes, at enterprise prices</td></tr>
+<tr><td>database branching</td><td class="n">no</td><td>yes</td><td class="n">one database only</td></tr>
+<tr class="us"><td>secondkey</td><td class="y">yes</td><td class="y">yes, before asking</td><td class="y">postgres, terraform, git, cloud</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="pricing" class="wrap">
+<div class="eyebrow">pricing</div>
+<h2>safety is free. teams pay for the shared parts.</h2>
+<div class="price">
+<div><div style="color:var(--mute)">free</div><div class="p">$0</div><div class="f">open-source cli, hooks, policies, snapshots, undo</div></div>
+<div><div style="color:var(--hot2)">team</div><div class="p">$15<small> /dev/mo</small></div><div class="f">hosted approvals, slack app, team policies, 30-day history</div></div>
+<div><div style="color:var(--mute)">business</div><div class="p">$40<small> /dev/mo</small></div><div class="f">role-based approvals, sso, 1-year audit, cloud snapshots</div></div>
+<div><div style="color:var(--mute)">enterprise</div><div class="p">custom</div><div class="f">self-hosted, servicenow and jira change requests, siem</div></div>
+</div>
+</section>
+
+<section aria-label="Questions" class="wrap" style="padding-top:56px">
+<div class="split">
+<div style="flex:1 1 280px"><div class="eyebrow">questions</div><h2 style="margin:0">the honest answers.</h2></div>
+<div style="flex:1.6 1 460px;border-top:1px solid var(--line)">
+<details><summary>does it slow my agent down?</summary><p>Safe commands are checked locally and pass straight through. Only actions your policy marks as risky wait for a human.</p></details>
+<details><summary>is this a sandbox?</summary><p>No. Sandboxes isolate where code runs. SecondKey controls what an agent may do to the real systems it already has access to. They work well together.</p></details>
+<details><summary>what can't be undone?</summary><p>Anything outside your systems: an email sent, a payment made, a webhook fired. Those should be set to deny or ask, never allowed automatically. Data written after a restore point also needs merging, which SecondKey flags for you.</p></details>
+<details><summary>what if the agent bypasses the hook?</summary><p>For databases, run the SQL proxy so raw connections need the second key too. Pair it with scoped, short-lived credentials so the agent never holds a key that skips the gate.</p></details>
+<details><summary>where does my data go?</summary><p>The free version runs entirely on your machine, and snapshots stay in your own storage. The hosted tiers only see approval metadata unless you choose otherwise.</p></details>
+</div>
+</div>
+</section>
+</main>
+
+<section id="waitlist" class="wl" style="padding:0">
+<div class="wrap">
+<h2>let agents work.<br>keep the second key.</h2>
+<form id="wl" novalidate>
+<label for="wl-email">work email</label>
+<div class="r"><input id="wl-email" type="email" placeholder="you@company.com" autocomplete="email"><button type="submit">join waitlist</button></div>
+<div class="msg" id="wl-msg" aria-live="polite"></div>
+</form>
+</div>
+</section>
+
+<footer class="wrap">
+<div><div style="color:var(--ink);font-weight:600;font-size:18px;margin-bottom:6px">second<span style="color:var(--hot)">key</span></div><div>the second key for every agent action. concept page: features and pricing are a draft.</div></div>
+<div><div style="color:#c9c4b8;margin-bottom:6px">built to work with</div><div>claude code · cursor · model context protocol · postgres · neon · terraform · kubernetes · git · slack · keycloak</div></div>
+</footer>
+
+<script>
+{
+const SEQ = [
+  ['SELECT * FROM orders LIMIT 50','safe'],['DROP TABLE users','risk'],['git commit -m "fix auth"','safe'],
+  ['terraform plan','safe'],['cat .env','secret'],['kubectl get pods -n prod','safe'],
+  ['terraform destroy -auto-approve','risk'],['npm test','safe'],['git push --force origin main','risk'],
+  ['ls ./migrations','safe'],['DELETE FROM invoices','risk'],['kubectl delete ns prod','risk']
+];
+const N = 10, $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let reduce = false; try { reduce = matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+let nextId = 10, tickN = 0, seqI = 3, playing = !reduce;
+let passed = 1, approvedN = 0, deniedN = 0, events = [];
+const chips = new Array(N).fill(null);
+chips[0] = { id: 1, cmd: SEQ[0][0], k: 'safe', lane: 0, x: 62, st: 'pass', logged: true };
+chips[1] = { id: 2, cmd: 'DROP TABLE users', k: 'risk', lane: 1, x: 16, st: 'held', snap: 'snap_7f3a' };
+chips[2] = { id: 3, cmd: SEQ[2][0], k: 'safe', lane: 3, x: 4, st: 'pass' };
+
+const gate = $('gate'), els = [];
+for (let i = 0; i < N; i++) {
+  const d = document.createElement('div');
+  d.className = 'chip'; d.style.display = 'none';
+  d.innerHTML = '<span class="c"></span><span class="t"></span><button type="button" class="ok">allow</button><button type="button" class="no">deny</button>';
+  d.querySelector('.ok').addEventListener('click', () => decide(i, true));
+  d.querySelector('.no').addEventListener('click', () => decide(i, false));
+  gate.appendChild(d); els.push(d);
+}
+const now = () => { try { return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); } catch (e) { return ''; } };
+const log = (verb, cmd, note, extra) => { events = [Object.assign({ id: nextId++, t: now(), verb, cmd, note: note || '' }, extra || {})].concat(events).slice(0, 6); };
+const freeLanes = () => { const busy = new Set(chips.filter(c => c && (c.x < 14 || c.st === 'held')).map(c => c.lane)); return [0,1,2,3,4].filter(l => !busy.has(l)); };
+const place = c => { const i = chips.indexOf(null); if (i < 0) return false; chips[i] = Object.assign({ id: nextId++, x: -36, fresh: true }, c); return true; };
+const snapId = () => 'snap_' + Math.random().toString(36).slice(2, 6);
+
+function tick() {
+  for (let i = 0; i < N; i++) {
+    const c = chips[i]; if (!c) continue; c.fresh = false;
+    if (c.st === 'denied') { c.fade = (c.fade || 0) + 1; if (c.fade > 2) chips[i] = null; continue; }
+    if (c.st === 'held') continue;
+    if (c.st === 'incoming') {
+      if (c.x + 9 >= 16) {
+        c.x = 16;
+        if (c.k === 'secret') { c.st = 'denied'; c.fade = 0; deniedN++; log('deny', c.cmd, 'policy: secrets.read'); }
+        else { c.st = 'held'; c.snap = snapId(); log('hold', c.cmd, c.snap + ' saved'); }
+      } else c.x += 9;
+      continue;
+    }
+    c.x += 9;
+    if (c.st === 'pass' && !c.logged && c.x >= 16) { c.logged = true; passed++; log('allow', c.cmd, 'read-only'); }
+    if (c.x > 104) chips[i] = null;
+  }
+  if (tickN % 2 === 0) {
+    const held = chips.filter(c => c && c.st === 'held').length, free = freeLanes();
+    if (free.length) {
+      let [cmd, k] = SEQ[seqI % SEQ.length];
+      if (k === 'risk' && held >= 2) { seqI++; [cmd, k] = SEQ[seqI % SEQ.length]; if (k === 'risk') { cmd = 'terraform plan'; k = 'safe'; } }
+      seqI++;
+      place({ cmd, k, lane: free[((tickN / 2) | 0) % free.length], st: k === 'safe' ? 'pass' : 'incoming' });
+    }
+  }
+  tickN++; render();
+}
+function decide(i, ok) {
+  const c = chips[i]; if (!c || c.st !== 'held') return;
+  if (ok) { c.st = 'approved'; approvedN++; log('approved', c.cmd, 'by you · ' + c.snap, { snap: c.snap, undoable: true }); }
+  else { c.st = 'denied'; c.fade = 0; deniedN++; log('denied', c.cmd, 'by you · nothing touched'); }
+  render();
+}
+function undo(id) {
+  const e = events.find(x => x.id === id); if (!e || !e.undoable) return;
+  e.undoable = false; e.note += ' · undone';
+  log('restored', e.cmd, 'from ' + e.snap); render();
+}
+const VC = { allow: 'var(--ok)', hold: 'var(--hot2)', approved: '#ffb08f', denied: 'var(--bad)', deny: 'var(--bad)', restored: 'var(--ok)' };
+function render() {
+  for (let i = 0; i < N; i++) {
+    const c = chips[i], d = els[i];
+    if (!c) { d.style.display = 'none'; continue; }
+    let bg = '#1c1b18', fg = '#e4e0d6', bd = '#34312b', op = 1, deco = 'none', left = c.x, w = 34;
+    if (c.st === 'held') { bg = '#ff5a1f'; fg = '#120a05'; bd = '#ff5a1f'; left = 3; w = 46; }
+    else if (c.st === 'approved') { bg = '#3a1f12'; fg = '#ffc2a8'; bd = '#6b351d'; }
+    else if (c.st === 'denied') { fg = '#8f8a80'; op = c.fade >= 1 ? 0 : 0.7; deco = 'line-through'; }
+    d.style.cssText = 'left:' + left + '%;top:' + (c.lane * 64 + 12) + 'px;width:' + w + '%;border-color:' + bd + ';background-color:' + bg + ';color:' + fg + ';opacity:' + op + ';text-decoration:' + deco + ';transition:' + (c.fresh || reduce ? 'none' : 'left .75s linear,width .4s ease,opacity .6s ease,background-color .3s ease');
+    d.querySelector('.c').textContent = c.cmd;
+    const t = d.querySelector('.t'), held = c.st === 'held';
+    t.textContent = c.st === 'approved' ? c.snap + ' ✓' : c.st === 'denied' ? 'denied' : '';
+    t.style.display = t.textContent ? '' : 'none';
+    d.querySelector('.ok').style.display = held ? '' : 'none';
+    d.querySelector('.no').style.display = held ? '' : 'none';
+    d.querySelector('.ok').setAttribute('aria-label', 'Approve ' + c.cmd);
+    d.querySelector('.no').setAttribute('aria-label', 'Deny ' + c.cmd);
+  }
+  $('s-pass').textContent = passed;
+  $('s-held').textContent = chips.filter(c => c && c.st === 'held').length;
+  $('s-appr').textContent = approvedN;
+  $('s-deny').textContent = deniedN;
+  $('events').innerHTML = events.length ? events.map(e =>
+    '<div class="ev"><span class="tm">' + esc(e.t) + '</span><span class="vb" style="color:' + (VC[e.verb] || 'var(--ink2)') + '">' + esc(e.verb) + '</span><span class="cm">' + esc(e.cmd) + '</span><span class="nt">' + esc(e.note) + '</span>' +
+    (e.undoable ? '<button type="button" data-undo="' + e.id + '">undo</button>' : '') + '</div>').join('')
+    : '<div class="ev" style="color:var(--dim);font-family:inherit">Waiting for the first command…</div>';
+}
+$('events').addEventListener('click', e => { const b = e.target.closest('button[data-undo]'); if (b) undo(+b.dataset.undo); });
+$('play').addEventListener('click', () => { playing = !playing; $('play').textContent = playing ? 'pause' : 'play'; });
+$('play').textContent = playing ? 'pause' : 'play';
+
+function classify(cmd) {
+  const t = cmd.toLowerCase();
+  if (/(\.env|secret|credential|id_rsa|\.aws|\.ssh|token|password)/.test(t)) return 'secret';
+  if (/(drop\s|delete\s|truncate|destroy|--force|rm\s+-r|kubectl\s+delete|reset\s+--hard|shutdown|mkfs|dd\s+if=|alter\s+table|update\s+\w+\s+set)/.test(t)) return 'risk';
+  return 'safe';
+}
+$('try').addEventListener('submit', e => {
+  e.preventDefault();
+  const inp = $('try-cmd'), hint = $('try-hint'), cmd = inp.value.trim().slice(0, 80);
+  if (!cmd) { hint.textContent = 'Type a command first.'; return; }
+  const k = classify(cmd);
+  let free = freeLanes(), lane = free.length ? free[0] : -1;
+  if (lane < 0) { const i = chips.findIndex(c => c && c.st !== 'held' && c.x < 14); if (i >= 0) { lane = chips[i].lane; chips[i] = null; } }
+  if (lane < 0 || !place({ cmd, k, lane, st: k === 'safe' ? 'pass' : 'incoming' })) { hint.textContent = 'The gate is full. Decide on a held command first.'; return; }
+  hint.textContent = k === 'secret' ? 'Secret access: the gate will block it automatically.' : k === 'risk' ? 'Destructive: it will stop at the gate and wait for your second key.' : 'Looks safe: it will pass straight through.';
+  inp.value = ''; playing = true; $('play').textContent = 'pause'; render();
+});
+
+let copyT;
+$('copy').addEventListener('click', () => {
+  const b = $('copy'); clearTimeout(copyT);
+  const done = ok => { b.textContent = ok ? 'copied' : 'copy blocked'; copyT = setTimeout(() => b.textContent = 'copy', 1800); };
+  try { navigator.clipboard.writeText('pipx install secondkey\nsecondkey init').then(() => done(true), () => done(false)); } catch (e) { done(false); }
+});
+
+$('wl').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = $('wl-email').value.trim(), m = $('wl-msg');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { m.textContent = 'enter a valid email first.'; return; }
+  m.textContent = "you're on the list. (demo only: nothing was sent or stored.)";
+  $('wl-email').value = '';
+});
+
+render();
+setInterval(() => { if (playing) tick(); }, 750);
+}
+</script>
+</body>
+</html>
