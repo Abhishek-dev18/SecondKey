@@ -228,10 +228,10 @@ footer div{flex:1 1 300px}
 <div class="tx">
 <div class="eyebrow" style="margin-bottom:10px">install</div>
 <div class="big">two commands. your next agent session needs a second key.</div>
-<div style="color:var(--mute);font-size:16px;margin-top:8px">init finds Claude Code or Cursor, adds the hook and writes a default policy. Available with early access.</div>
+<div style="color:var(--mute);font-size:16px;margin-top:8px">init writes a default policy and adds the hook to Claude Code. Postgres, git, files, Kubernetes and Terraform snapshots in v0.1.</div>
 </div>
 <div class="code">
-<pre><span class="n">$</span> pipx install secondkey
+<pre><span class="n">$</span> pipx install git+https://github.com/Abhishek-dev18/SecondKey
 <span class="n">$</span> secondkey init</pre>
 <button class="pill" id="copy" type="button">copy</button>
 </div>
@@ -422,7 +422,7 @@ let copyT;
 $('copy').addEventListener('click', () => {
   const b = $('copy'); clearTimeout(copyT);
   const done = ok => { b.textContent = ok ? 'copied' : 'copy blocked'; copyT = setTimeout(() => b.textContent = 'copy', 1800); };
-  try { navigator.clipboard.writeText('pipx install secondkey\nsecondkey init').then(() => done(true), () => done(false)); } catch (e) { done(false); }
+  try { navigator.clipboard.writeText('pipx install git+https://github.com/Abhishek-dev18/SecondKey\nsecondkey init').then(() => done(true), () => done(false)); } catch (e) { done(false); }
 });
 
 $('wl').addEventListener('submit', e => {

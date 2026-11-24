@@ -1,0 +1,85 @@
+# SecondKey policy
+#
+# Every agent action gets a dotted category such as sql.drop, git.force_push
+# or secrets.read (run `secondkey check "<command>"` to see one). Rules are
+# checked top to bottom and the first match wins. Globs are allowed.
+#
+#   action: allow  run immediately
+#           ask    hold until a human approves (`secondkey approve <id>`)
+#           deny   never run
+#   snapshot: take a restore point right before the command runs
+#             (default true for ask, false for allow)
+#
+# A command made of several parts (a && b; c | d) gets the strictest decision
+# of all its parts.
+version: 1
+
+rules:
+  # Never: these leak data or can't be undone.
+  - match: ["secrets.*", "shell.pipe_to_shell", "fs.delete_critical", "sql.drop_database", "system.destructive"]
+    action: deny
+    reason: "Blocked by policy: this can leak secrets or cause damage that can't be undone."
+
+  # Destructive and undoable: snapshot, then wait for the second key.
+  - match: ["sql.drop", "sql.truncate", "sql.delete", "sql.update", "sql.alter", "sql.drop_other", "sql.other"]
+    action: ask
+  # Migration tools that drop or roll back schema (alembic downgrade, prisma migrate reset, rails db:drop ...).
+  # With a Postgres DATABASE_URL in the environment, the whole database is snapshotted.
+  - match: ["db.reset", "db.migrate_down"]
+    action: ask
+  - match: ["fs.delete_recursive", "git.force_push", "git.delete_remote_branch", "git.reset_hard",
+            "git.clean", "git.branch_delete", "git.discard", "git.rewrite"]
+    action: ask
+  - match: ["tf.destroy", "tf.apply", "tf.state_write", "k8s.delete", "k8s.scale_to_zero"]
+    action: ask
+  - match: ["docker.delete", "cloud.delete"]
+    action: ask
+  # MCP tools whose names look destructive.
+  - match: ["mcp.*.*delete*", "mcp.*.*drop*", "mcp.*.*destroy*", "mcp.*.*remove*", "mcp.*.*truncate*",
+            "mcp.*.*purge*", "mcp.*.*wipe*", "mcp.*.*reset*", "mcp.*.*force*"]
+    action: ask
+
+  # Small and common: let it run, but keep a restore point.
+  - match: ["fs.delete"]
+    action: allow
+    snapshot: true
+
+  # Commands SecondKey can't read fully: ask rather than guess.
+  - match: ["shell.unparsed", "sql.interactive"]
+    action: ask
+    snapshot: false
+
+# Anything not matched above.
+default: allow
+
+approval:
+  # Where the second key is turned:
+  #   secondkey  hold the command; approve with `secondkey approve <id>` (works when
+  #              you're away, records who approved). Default.
+  #   agent      take the snapshot, then let the agent's own permission prompt
+  #              (e.g. Claude Code's) ask you on the spot.
+  via: secondkey
+  # How long the hook waits for an approval before telling the agent the
+  # command is held. 0 = return immediately; the agent retries after you
+  # run `secondkey approve <id>`.
+  wait_seconds: 0
+  # How long an approval stays valid for the exact same command.
+  ttl_minutes: 15
+  # If a snapshot fails right before an approved command runs, block it.
+  require_snapshot: true
+
+notify:
+  # Slack incoming webhook, e.g. ${SECONDKEY_SLACK_WEBHOOK}. Leave empty to disable.
+  slack_webhook: "${SECONDKEY_SLACK_WEBHOOK}"
+
+snapshots:
+  # Delete restore points older than this (the newest one is always kept).
+  retention_days: 14
+  # Keep total snapshot storage under this; the oldest go first.
+  max_total_mb: 5120
+  # Skip file snapshots bigger than this (they'll be reported as not protected).
+  max_file_snapshot_mb: 500
+  # Postgres: dumps larger than this are refused (use strategy: neon for big databases).
+  postgres_max_dump_mb: 2048
+  # Postgres snapshot method: dump (pg_dump) or neon (instant branch via neonctl).
+  postgres_strategy: dump
