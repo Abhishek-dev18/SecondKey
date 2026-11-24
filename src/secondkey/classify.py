@@ -557,6 +557,11 @@ def classify_shell(command: str, cwd: str, env: dict[str, str] | None = None, _d
             actions.extend(_generic_sql(prog, argv, env))
         elif prog in ("dropdb", "dropuser"):
             actions.append(Action("sql.drop_database", " ".join(argv)))
+        elif prog.lower() in ("del", "erase", "rd", "remove-item", "ri") or (prog == "rmdir" and any(a.lower() == "/s" for a in argv[1:])):
+            # Windows / PowerShell deletes: map their flags onto rm's
+            recursive = any(a.lower() in ("/s", "-recurse", "-r") for a in argv[1:])
+            targets = [a for a in argv[1:] if not a.startswith(("/", "-"))]
+            actions.extend(_rm(["rm"] + (["-r"] if recursive else []) + targets, cwd, env))
         elif prog in ("rm", "unlink", "rmdir", "shred"):
             actions.extend(_rm(argv if prog != "shred" else ["rm"] + argv[1:], cwd, env))
         elif prog == "find" and ("-delete" in argv or "-exec" in argv and "rm" in argv):

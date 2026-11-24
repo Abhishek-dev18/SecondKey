@@ -63,6 +63,22 @@ def project_root(start: str) -> Path:
 HOOK_MARK = "secondkey hook claude-code"
 
 
+def hook_command(agent: str) -> str:
+    """The command an agent should run for the hook.
+
+    On Windows, paths are written with forward slashes and double quotes, which work
+    in Git Bash (what Claude Code uses on Windows), cmd.exe and PowerShell alike.
+    """
+    exe = shutil.which("secondkey")
+    if os.name == "nt":
+        if exe:
+            return f'"{exe.replace(os.sep, "/")}" hook {agent}'
+        return f'"{sys.executable.replace(os.sep, "/")}" -m secondkey hook {agent}'
+    if exe:
+        return f"{shlex.quote(exe)} hook {agent}"
+    return f"{shlex.quote(sys.executable)} -m secondkey hook {agent}"
+
+
 def install_claude_hook(settings_path: Path) -> str:
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     data: dict[str, Any] = {}
@@ -77,8 +93,7 @@ def install_claude_hook(settings_path: Path) -> str:
         for h in group.get("hooks", []):
             if HOOK_MARK in str(h.get("command", "")):
                 return "already installed"
-    exe = shutil.which("secondkey")
-    command = f"{shlex.quote(exe)} hook claude-code" if exe else f"{shlex.quote(sys.executable)} -m {HOOK_MARK}"
+    command = hook_command("claude-code")
     pre.append({"matcher": "*", "hooks": [{"type": "command", "command": command, "timeout": 900}]})
     tmp = settings_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n")
@@ -99,8 +114,7 @@ def install_cursor_hook(hooks_path: Path) -> str:
             raise SystemExit(f"{hooks_path} is not valid JSON ({e}); fix it and re-run init.")
     data.setdefault("version", 1)
     hooks = data.setdefault("hooks", {})
-    exe = shutil.which("secondkey")
-    command = f"{shlex.quote(exe)} hook cursor" if exe else f"{shlex.quote(sys.executable)} -m secondkey hook cursor"
+    command = hook_command("cursor")
     added = 0
     for ev in CURSOR_EVENTS:
         entries = hooks.setdefault(ev, [])

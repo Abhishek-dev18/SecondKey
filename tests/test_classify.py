@@ -55,6 +55,9 @@ def cats(cmd, cwd="/tmp", env=None):
     ("bash -c 'rm -rf data && echo ok'", ["fs.delete_recursive", "shell.other"]),
     ("echo 'unterminated", ["shell.unparsed"]),
     ("mkfs.ext4 /dev/sdb1", ["system.destructive"]),
+    ("rmdir /s /q build", ["fs.delete_recursive"]),
+    ("del /q notes.txt", ["fs.delete"]),
+    ("Remove-Item -Recurse -Force data", ["fs.delete_recursive"]),
 ])
 def test_shell(cmd, expected):
     assert cats(cmd) == expected
