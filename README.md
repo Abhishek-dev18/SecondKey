@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo-wordmark.svg" alt="SecondKey" width="260">
+  <img src="https://raw.githubusercontent.com/Abhishek-dev18/SecondKey/main/assets/logo-wordmark.svg" alt="SecondKey" width="260">
 </p>
 
 <p align="center"><b>Agents hold the first key. You hold the second.</b></p>
@@ -17,13 +17,13 @@ SecondKey is a change-control gate for AI agents. It sits between Claude Code (o
 ## Install
 
 ```bash
-pipx install git+https://github.com/Abhishek-dev18/SecondKey
+pipx install secondkey
 cd your-project
 secondkey init          # writes .secondkey/policy.yaml and adds the Claude Code hook
 secondkey doctor        # checks hooks, tools and state
 ```
 
-`init --agent cursor` adds the Cursor hooks (repeat `--agent` for both). `init --scope user` installs for every project instead. Try it end to end with [docs/try-it-with-claude-code.md](docs/try-it-with-claude-code.md). Requires Python 3.9+. For Postgres snapshots, `psql`, `pg_dump` and `pg_restore` must be on your PATH (same major version as your server or newer).
+`init --agent cursor` adds the Cursor hooks (repeat `--agent` for both). `init --scope user` installs for every project instead. Try it end to end with [docs/try-it-with-claude-code.md](https://github.com/Abhishek-dev18/SecondKey/blob/main/docs/try-it-with-claude-code.md). Website: [abhishek-dev18.github.io/SecondKey](https://abhishek-dev18.github.io/SecondKey/). Requires Python 3.9+. For Postgres snapshots, `psql`, `pg_dump` and `pg_restore` must be on your PATH (same major version as your server or newer).
 
 ## What it looks like
 
@@ -160,9 +160,9 @@ State (approvals, snapshots, audit log) lives in `~/.secondkey/` (override with 
 - MCP tools are gated by name; their effects can't be snapshotted automatically.
 - Approvals happen in the CLI, or Slack (notification only for now; buttons come with the hosted version).
 - Snapshots are local. Dumps over `postgres_max_dump_mb` (2 GB) and file snapshots over 500 MB are refused and reported as unprotected; use the Neon strategy for big Postgres databases.
-- Tested on Linux. macOS should work; Windows is untested.
+- Tested on Linux, and on Windows with Claude Code (desktop app, Git Bash and PowerShell). macOS should work but is untested. On Windows, Claude Code often runs commands through PowerShell, and the classifier is still Bash-oriented.
 
-More recipes: [docs/policy-cookbook.md](docs/policy-cookbook.md).
+More recipes: [docs/policy-cookbook.md](https://github.com/Abhishek-dev18/SecondKey/blob/main/docs/policy-cookbook.md).
 
 ## Development
 
