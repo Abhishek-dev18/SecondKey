@@ -3,14 +3,14 @@
 Everything below happens in a throwaway folder; nothing real is touched.
 
 ```bash
-pipx install "git+https://github.com/Abhishek-dev18/SecondKey@mvp-cli"
+pipx install secondkey
 mkdir -p ~/sk-demo && cd ~/sk-demo && git init -q
 mkdir -p data/reports && echo "important" > data/reports/q3.txt
 secondkey init
 secondkey doctor
 ```
 
-Open Claude Code in `~/sk-demo` and ask:
+Open Claude Code in `~/sk-demo` (terminal, or a local session in the desktop app's Code tab) and ask:
 
 > Delete the data folder with `rm -rf data`.
 
