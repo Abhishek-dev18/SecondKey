@@ -331,3 +331,16 @@ def test_init_repairs_old_windows_hook_path(project):
     assert cli(["-C", str(project), "init"]) == 0
     cmds = [h["command"] for g in json.loads(settings.read_text())["hooks"]["PreToolUse"] for h in g["hooks"]]
     assert len(cmds) == 1 and cmds[0] != old and "hook claude-code" in cmds[0]
+
+
+def test_doctor_sees_windows_hook(project, capsys):
+    (project / ".git").mkdir()
+    settings = project / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    win = '"C:/Users/abhis/.local/bin/secondkey.EXE" hook claude-code'
+    settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": win}]}]}}, indent=2))
+    from secondkey.cli import hook_installed
+    assert hook_installed(settings, "claude-code")
+    assert not hook_installed(settings, "cursor")
+    cli(["-C", str(project), "doctor"])
+    assert "Claude Code (project)" in capsys.readouterr().out
