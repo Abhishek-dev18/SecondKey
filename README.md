@@ -1,186 +1,184 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Abhishek-dev18/SecondKey/main/assets/logo-wordmark.svg" alt="SecondKey" width="260">
+  <img src="https://raw.githubusercontent.com/Abhishek-dev18/SecondKey/main/assets/logo-wordmark.svg" alt="SecondKey" width="280">
 </p>
 
-<p align="center"><b>Agents hold the first key. You hold the second.</b></p>
+<h3 align="center">Agents hold the first key. You hold the second.</h3>
 
-SecondKey is a change-control gate for AI agents. It sits between Claude Code (or any agent that runs shell commands) and your infrastructure:
+<p align="center">
+  Approve, snapshot and undo every destructive command an AI agent runs.
+</p>
 
-- **Safe commands pass straight through.** Reads, tests and plans run with no delay.
-- **Destructive commands stop at the gate.** `DROP TABLE`, `DELETE`, `rm -rf`, `git push --force`, `terraform destroy`, `kubectl delete` and more are held until a human approves.
-- **A restore point is taken right before an approved command runs.** If the approval was a mistake, `secondkey undo` puts things back.
-- **Secrets are never read.** `.env`, cloud credentials, SSH keys and `curl | sh` are denied by policy.
-- **Everything is logged** in a hash-chained audit log, so tampering is detectable.
+<p align="center">
+  <a href="https://pypi.org/project/secondkey/"><img src="https://img.shields.io/pypi/v/secondkey?color=ff5a1f&label=pypi" alt="PyPI"></a>
+  <a href="https://github.com/Abhishek-dev18/SecondKey/actions/workflows/test.yml"><img src="https://github.com/Abhishek-dev18/SecondKey/actions/workflows/test.yml/badge.svg" alt="tests"></a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-3776ab" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Cursor-0e0d0b" alt="Works with Claude Code and Cursor">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-informational" alt="Apache-2.0"></a>
+</p>
 
-> Status: v0.2, early. Works with Claude Code and Cursor (hooks), any Postgres client via the proxy, and anything else via `secondkey exec`.
+<p align="center">
+  <a href="https://abhishek-dev18.github.io/SecondKey/">Website</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="https://github.com/Abhishek-dev18/SecondKey/blob/main/docs/policy-cookbook.md">Policy cookbook</a> ·
+  <a href="https://github.com/Abhishek-dev18/SecondKey/blob/main/docs/try-it-with-claude-code.md">5-minute tour</a>
+</p>
 
-## Install
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Abhishek-dev18/SecondKey/main/assets/demo.gif" alt="Claude Code tries rm -rf data; SecondKey holds it; the human approves; a restore point is taken; secondkey undo brings the folder back" width="880">
+</p>
+<p align="center"><sub>A real run on Windows with Claude Code: held → approved → snapshot → undone. <a href="https://github.com/Abhishek-dev18/SecondKey/raw/main/assets/secondkey-demo.mp4">Download the MP4</a></sub></p>
+
+---
+
+## Why
+
+AI agents with real credentials keep destroying real data:
+
+| When | What happened |
+|---|---|
+| Jul 2025 | **Replit**: an agent deleted a production database during an explicit code freeze |
+| Feb 2026 | **DataTalks.Club**: an agent ran `terraform destroy` against live infrastructure |
+| Apr 2026 | **PocketOS**: database and backups gone in 9 seconds, via a token unrelated to the task |
+
+A rule in the prompt doesn't stop an agent. **A gate the command has to pass through does.** SecondKey is that gate, and because it takes a restore point right before anything destructive runs, even a wrong "yes" can be undone.
+
+## Quick start
 
 ```bash
 pipx install secondkey
 cd your-project
-secondkey init          # writes .secondkey/policy.yaml and adds the Claude Code hook
-secondkey doctor        # checks hooks, tools and state
+secondkey init      # adds the hook to Claude Code (--agent cursor for Cursor)
+secondkey doctor    # checks hooks, tools and state
 ```
 
-`init --agent cursor` adds the Cursor hooks (repeat `--agent` for both). `init --scope user` installs for every project instead. Try it end to end with [docs/try-it-with-claude-code.md](https://github.com/Abhishek-dev18/SecondKey/blob/main/docs/try-it-with-claude-code.md). Website: [abhishek-dev18.github.io/SecondKey](https://abhishek-dev18.github.io/SecondKey/). Requires Python 3.9+. For Postgres snapshots, `psql`, `pg_dump` and `pg_restore` must be on your PATH (same major version as your server or newer).
+Now ask your agent to do something destructive. It gets held:
 
-## What it looks like
-
-The agent tries something destructive:
-
-```
-psql $PROD_DB -c "DROP TABLE users CASCADE;"
+```text
+SecondKey held this command for human approval (request req_37f20e).
+Why: fs.delete_recursive → ask. Impact: 1 file, 10 B in 1 path.
 ```
 
-Claude Code is told:
-
-```
-SecondKey held this command for human approval (request req_880c0e).
-Why: sql.drop → ask. Impact: users: 5,000 rows.
-A restore point will be taken right before it runs, so it can be undone.
-Ask the user to review it and run `secondkey approve req_880c0e` ...
-```
-
-You look and decide:
+You decide in your terminal:
 
 ```console
-$ secondkey pending
-req_880c0e  pending  12s ago  claude-code  /home/riya/shop
-  psql $PROD_DB -c "DROP TABLE users CASCADE;"
-  why: sql.drop → ask
-  impact: users: 5,000 rows
-
-$ secondkey approve req_880c0e
-approved req_880c0e by riya. The agent can now retry the exact same command (valid 15 min).
+$ secondkey pending                 # what's waiting, with the blast radius
+$ secondkey approve req_37f20e      # turn the second key (or: secondkey deny)
+$ secondkey undo snap_be3d7b        # changed your mind? put it back
 ```
 
-The agent retries, SecondKey dumps `users` (plus the foreign keys on other tables that `CASCADE` will remove), and the command runs. If that was a mistake:
+## How it works
 
-```console
-$ secondkey undo req_880c0e
-snap_453a77  postgres  users (5,000 rows)
-  will: users: recreate the table with 5,000 rows, indexes and constraints
-  will: re-add foreign key orders_user_id_fkey on orders if it's missing
-  will: re-add foreign key carts_user_id_fkey on carts if it's missing
-Restore? [y/N] y
-  ✓ tables recreated from the snapshot: users
-  ✓ foreign key orders_user_id_fkey on orders re-added
-  ✓ foreign key carts_user_id_fkey on carts re-added
-  ✓ verified users: 5,000 rows
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Abhishek-dev18/SecondKey/main/assets/how-it-works.svg" alt="Agent → classify → policy → deny / allow / ask → you approve → snapshot → runs; every decision goes to the audit log" width="900">
+</p>
+
+- **Classify.** Every shell command, SQL statement and tool call becomes a category: `sql.drop`, `git.force_push`, `secrets.read`, `db.reset`, ... (`secondkey check "<cmd>"` shows it).
+- **Decide.** A YAML policy says allow, ask or deny. First match wins; `a && b` gets the strictest verdict.
+- **Hold.** Asked-for commands wait for `secondkey approve`. The approval is single-use, for the exact same command, for 15 minutes.
+- **Snapshot, then run.** The restore point is taken at the last moment, after approval. If it can't be taken, nothing runs.
+- **Record.** Every decision goes to a hash-chained audit log (`secondkey log --verify` detects tampering).
+
+## What can be undone
+
+| Target | Restore point | Undo |
+|---|---|---|
+| **Postgres** `DROP` `TRUNCATE` `DELETE` `UPDATE` `ALTER` | `pg_dump` of the tables, row counts, and the foreign keys a `CASCADE` would remove | Tables recreated with indexes, constraints and sequences; FKs re-added; for tables that still exist, saved rows merged back by primary key while rows written since are kept. One transaction, verified |
+| **Migrations** `prisma migrate reset`, `alembic downgrade`, `rails db:drop`, `manage.py flush` and 10 more | Whole-database dump (needs a Postgres `DATABASE_URL`) | Whole database restored |
+| **Neon** (`postgres_strategy: neon`) | Just a timestamp, for any size | Branch rewound to that moment; current state kept as a branch |
+| **MySQL / MariaDB** | `mysqldump` of the tables | Replayed and row counts verified |
+| **Files** `rm`, `rm -rf`, `del`, `Remove-Item` | tar.gz of the paths | Put back (won't overwrite without `--force`) |
+| **Git** force push, `reset --hard`, `clean`, `branch -D`, stash drop | Commits pinned under `refs/secondkey/`, uncommitted work saved | Remote restored, branch recreated, edits re-applied |
+| **AWS** `delete-volume`, `delete-db-instance`, `s3 rm/rb` | EBS / RDS snapshot, or S3 objects downloaded | New volume, instance restored, objects uploaded back |
+| **Docker** `volume rm`, `volume prune` | Volume contents archived | Volume recreated and unpacked |
+| **Kubernetes** `kubectl delete` | Objects exported as YAML | `kubectl apply` (volume data not included) |
+| **Terraform** `destroy`, `apply`, `state rm/mv` | State + config commit | State surgery reversed; for destroy, it tells you how to recreate, and doesn't pretend |
+
+**Can't be undone, so denied or held without a snapshot:** sent emails, payments and webhooks, `DROP DATABASE`, cloud deletes without a provider, anything reading secrets. Before you approve, you see the blast radius: row counts per table, and for `DELETE … WHERE` how many rows match.
+
+## Beyond shell commands: the Postgres proxy
+
+Hooks see the commands an agent runs, but not a Python script it writes or an ORM it calls. Put the proxy in front of the database:
+
+```bash
+secondkey proxy --upstream db.internal:5432 --upstream-ssl
+# give the agent: DATABASE_URL=postgresql://app:PASS@127.0.0.1:6543/shop
 ```
+
+Every query from any client is checked. Held queries fail with a normal Postgres error that names the request to approve, and transactions stay consistent.
+
+## Built so the agent can't switch it off
+
+- **The agent can't turn the second key.** A built-in guard, which no policy can disable, denies an agent that runs `secondkey approve/deny/undo/prune`, touches `~/.secondkey/`, or edits `.secondkey/policy.yaml`, `.claude/settings*.json` or `.cursor/hooks.json`.
+- **Never widens permissions.** For allowed commands it returns no decision, so Claude Code's own permission rules still apply.
+- **Fails safe.** If SecondKey errors, the hook answers `ask` (Claude Code) or `deny` (Cursor) instead of crashing, because a crashing hook would let the command run.
+- **No secrets in logs.** Passwords and tokens are masked before anything is stored, logged or sent to Slack.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `secondkey init` | Write a policy and install the Claude Code `PreToolUse` hook (merges with your existing settings) |
-| `secondkey check "<cmd>"` | Show how a command is classified and what the policy decides, with its impact. Runs nothing |
+| `secondkey init` | Write a policy and install the hook (`--agent cursor`, `--scope user`) |
+| `secondkey check "<cmd>"` | Show the category, decision and impact. Runs nothing |
 | `secondkey pending` | List held commands (`--all` for history) |
-| `secondkey approve <req>` | Turn the second key. Valid once, for the exact same command, for 15 minutes |
-| `secondkey deny <req>` | Reject. The agent is told not to retry |
-| `secondkey snapshots` | List restore points |
-| `secondkey undo <snap or req>` | Restore. Shows what it will do and asks first (`--yes`, `--dry-run`, `--mode`) |
-| `secondkey log` | Audit log. `--verify` checks the hash chain |
-| `secondkey policy` | Show the effective policy |
-| `secondkey exec -- <cmd>` | Run a command through the gate, for agents without hook support. Waits up to 5 min for approval |
-| `secondkey proxy --upstream host:5432` | Postgres proxy: gates every query from scripts, ORMs and migrations, not just shell commands |
-| `secondkey prune` | Delete old restore points (also runs automatically once a day; the newest is always kept) |
-| `secondkey doctor` | Check hooks, tools, policy, audit chain and snapshot storage |
-
-## How it works
-
-```
-agent proposes a command
-  → classify  shell/SQL/tool call → actions like sql.drop, git.force_push, secrets.read
-  → policy    first matching rule: allow / ask / deny  (a && b gets the strictest)
-  → deny      blocked, agent told not to work around it
-  → allow     runs (some rules, like single-file rm, take a quiet snapshot first)
-  → ask       held as a request; Slack ping if configured
-              human approves → agent retries → snapshot → runs
-  → audit     every decision appended to a hash-chained log
-```
-
-SecondKey never widens what Claude Code allows on its own: for allowed commands it returns no decision, so Claude Code's normal permission rules still apply. If SecondKey itself errors, the hook answers `ask` (Claude Code) or `deny` (Cursor) rather than crashing, because a crashing hook would let the command run.
-
-**The agent can't hold the second key.** A built-in guard, which no policy can turn off, denies an agent that tries to run `secondkey approve`/`deny`/`undo`/`prune`, touch `~/.secondkey/`, or change `.secondkey/policy.yaml`, `.claude/settings*.json` or `.cursor/hooks.json`. Commands are stored and logged with passwords and tokens masked, and the state directory is private to your user.
-
-### What can be undone
-
-| Target | Snapshot | Undo |
-|---|---|---|
-| **Postgres** `DROP`, `TRUNCATE`, `DELETE`, `UPDATE`, `ALTER` via `psql` | `pg_dump` of the affected tables, row counts, foreign keys on other tables that point at them | Dropped tables are recreated with indexes, constraints and sequences, and foreign keys are re-added. For tables that still exist, saved rows are put back by primary key and rows written since are kept (`--mode exact` removes them). Verified inside the transaction; if anything fails, nothing changes |
-| **Files** `rm`, `rm -rf` | tar.gz of the paths | Put back; refuses to overwrite paths that exist again unless `--force` |
-| **Git** force push, delete remote branch, `reset --hard`, `checkout -- .`, `clean`, `branch -D`, stash drop | Commits pinned under `refs/secondkey/…`, uncommitted changes saved with `git stash create`, untracked files archived | Force-push the old commit back, reset and re-apply changes, recreate branches, restore files. Your current changes are saved first |
-| **Migrations** `prisma migrate reset`, `alembic downgrade`, `rails db:drop`, `manage.py flush` and more | Whole-database `pg_dump` when a Postgres `DATABASE_URL` is set | The whole database restored in one transaction |
-| **Neon** (any of the above, `postgres_strategy: neon`) | Just the timestamp: no copy, works for any size | `neon branches restore <branch> ^self@<time>`; the current state is kept as a branch |
-| **MySQL / MariaDB** `mysql -e "DROP/DELETE/…"` | `mysqldump` of the affected tables | Replayed, row counts verified |
-| **AWS** `ec2 delete-volume`, `rds delete-db-instance`, `s3 rm/rb` | EBS snapshot, RDS manual snapshot, or S3 objects downloaded | New volume from the snapshot, instance restored, objects uploaded back |
-| **Docker** `volume rm`, `volume prune`, `system prune --volumes` | Volume contents tarred through a throwaway container | Volume recreated and unpacked |
-| **Kubernetes** `kubectl delete` | `kubectl get -o yaml`, cleaned of server fields | `kubectl apply`. Data in deleted volumes is not restored |
-| **Terraform** `destroy`, `apply`, `state rm/mv` | `terraform state pull` and the config's git commit | State surgery: state pushed back. Destroy: explains how to recreate from the saved config. Cloud resources can't be un-destroyed, and SecondKey won't pretend otherwise |
-
-**Cannot be undone, so they're denied or held without a snapshot:** emails, payments and webhooks; `DROP DATABASE`; cloud deletes (`aws … delete`, `terminate-instances`); `docker system prune`; anything that reads secrets.
-
-Blast radius is shown before you approve: row counts per table, and for `DELETE`/`UPDATE … WHERE` how many rows match (estimated in a read-only transaction).
+| `secondkey approve <req>` / `deny <req>` | Turn the second key, or refuse |
+| `secondkey snapshots` / `undo <snap or req>` | List restore points, restore one (`--dry-run`, `--mode`) |
+| `secondkey log` | Audit log (`--verify` checks the hash chain) |
+| `secondkey proxy --upstream host:5432` | Gate every query to a Postgres database |
+| `secondkey exec -- <cmd>` | Run a command through the gate, for agents without hooks |
+| `secondkey prune` | Delete old restore points (also daily, automatically) |
+| `secondkey doctor` / `policy` | Check the setup / show the effective policy |
 
 ## Policy
 
-`secondkey init` writes `.secondkey/policy.yaml`. Rules are checked top to bottom and the first match wins:
+`secondkey init` writes `.secondkey/policy.yaml`:
 
 ```yaml
 rules:
   - match: ["secrets.*", "shell.pipe_to_shell", "sql.drop_database"]
     action: deny
-  - match: ["sql.drop", "sql.delete", "sql.truncate", "git.force_push", "tf.destroy", "k8s.delete"]
-    action: ask                 # snapshot: true is the default for ask
-  - match: ["fs.delete"]        # rm of single files
+  - match: ["sql.drop", "sql.delete", "git.force_push", "tf.destroy", "k8s.delete", "db.reset"]
+    action: ask                  # snapshot before running is the default for ask
+  - match: ["fs.delete"]         # deleting single files
     action: allow
-    snapshot: true              # run, but keep a restore point
+    snapshot: true               # run, but keep a restore point
 default: allow
 
 approval:
-  via: secondkey      # or "agent": snapshot, then let Claude Code's own prompt ask you
-  wait_seconds: 0     # how long the hook waits for an approval before replying "held"
+  via: secondkey     # or "agent": snapshot, then let Claude Code's own prompt ask you
   ttl_minutes: 15
-  require_snapshot: true
-
 notify:
   slack_webhook: "${SECONDKEY_SLACK_WEBHOOK}"
 ```
 
-Run `secondkey check "<command>"` to see the category of any command. Policy lookup order: `$SECONDKEY_POLICY`, `.secondkey/policy.yaml` in the project (searching upward to the git root), `~/.secondkey/policy.yaml`, then the built-in default.
+More recipes (gate all prod SQL, block force pushes, Neon, retention) in the [policy cookbook](https://github.com/Abhishek-dev18/SecondKey/blob/main/docs/policy-cookbook.md).
 
-State (approvals, snapshots, audit log) lives in `~/.secondkey/` (override with `SECONDKEY_HOME`).
+## Known limits
 
-## Known limits (v0.2)
-
-- Hooks see the commands an agent runs. For Postgres, run `secondkey proxy` so scripts and ORMs are gated too. Other databases and APIs called from agent-written code aren't covered, so give agents scoped credentials.
-- An agent could still write a script that edits SecondKey's files directly; the guard covers tool calls and shell commands, not arbitrary code. Running agents as a separate OS user closes this.
+- Other databases and APIs called from agent-written code aren't covered (use the Postgres proxy and scoped credentials).
+- An agent's own script could edit SecondKey's files directly; the guard covers tool calls and shell commands. Running the agent as a separate OS user closes this.
 - MCP tools are gated by name; their effects can't be snapshotted automatically.
-- Approvals happen in the CLI, or Slack (notification only for now; buttons come with the hosted version).
-- Snapshots are local. Dumps over `postgres_max_dump_mb` (2 GB) and file snapshots over 500 MB are refused and reported as unprotected; use the Neon strategy for big Postgres databases.
-- Tested on Linux, and on Windows with Claude Code (desktop app, Git Bash and PowerShell). macOS should work but is untested. On Windows, Claude Code often runs commands through PowerShell, and the classifier is still Bash-oriented.
+- Approvals happen in the CLI; Slack sends notifications (buttons are planned).
+- Snapshots are local; Postgres dumps over 2 GB and file snapshots over 500 MB are refused and reported (use the Neon strategy for big databases).
+- Tested on Linux and on Windows with Claude Code (desktop app, Git Bash, PowerShell). On Windows, Claude Code often runs commands through PowerShell and the classifier is still Bash-oriented. macOS should work but is untested.
 
-More recipes: [docs/policy-cookbook.md](https://github.com/Abhishek-dev18/SecondKey/blob/main/docs/policy-cookbook.md).
-
-## Development
+<details>
+<summary><b>Development</b></summary>
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                   # unit + git + files + stubbed k8s/terraform/aws/docker/mysql
+pytest -q                                   # unit, git, files, stubbed k8s/terraform/aws/docker/mysql
 SECONDKEY_TEST_PG='postgresql://postgres:postgres@localhost:5432/postgres' pytest -q   # + real Postgres and the proxy
 ```
 
-Releases: push a tag like `v0.2.0` and `.github/workflows/release.yml` publishes to PyPI (needs a one-time trusted-publisher setup on pypi.org, described in the workflow file). Licensed under Apache-2.0.
-
-## This repo
+Releases: push a tag like `v0.2.2` and `.github/workflows/release.yml` publishes to PyPI via trusted publishing.
 
 | Path | What it is |
 |---|---|
-| `src/secondkey/` | The CLI (`classify.py`, `policy.py`, `gate.py`, `snapshots/`, `hooks/`, `proxy.py`) |
-| `docs/` | Policy cookbook and a 5-minute Claude Code walkthrough |
+| `src/secondkey/` | The CLI: `classify.py`, `policy.py`, `gate.py`, `snapshots/`, `hooks/`, `proxy.py` |
+| `docs/` | Policy cookbook and a 5-minute Claude Code tour |
 | `tests/` | Test suite |
-| `index.html`, `assets/` | Landing page (live demo of the gate) and logo files |
+| `index.html`, `assets/` | Website and logo, diagram and demo files |
 
-The landing page is a single static file. Enable GitHub Pages for the `main` branch to publish it.
+</details>
+
+Licensed under [Apache-2.0](LICENSE).

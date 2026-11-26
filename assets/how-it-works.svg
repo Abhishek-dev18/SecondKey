@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" width="1200" height="440" role="img" aria-label="How SecondKey works: an agent command is classified, checked against policy, then denied, allowed, or held for a human; approved commands get a snapshot before they run, and every decision goes to the audit log.">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#8f8a80" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      .t{font-family:Inter,'Segoe UI',Helvetica,Arial,sans-serif;font-size:19px;font-weight:600;fill:#f2efe8}
+      .s{font-family:Inter,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;fill:#b8b3a8}
+      .m{font-family:'SFMono-Regular',Consolas,'DejaVu Sans Mono',monospace;font-size:13px;fill:#8f8a80}
+      .ln{stroke:#4a463e;stroke-width:1.6;fill:none}
+    </style>
+  </defs>
+  <rect width="1200" height="440" rx="20" fill="#0e0d0b"/>
+
+  <!-- pipeline -->
+  <g>
+    <rect x="30" y="150" width="180" height="76" rx="12" fill="#141310" stroke="#2a2823"/>
+    <text x="120" y="182" text-anchor="middle" class="t">AI agent</text>
+    <text x="120" y="205" text-anchor="middle" class="s">Claude Code · Cursor</text>
+  </g>
+  <line x1="212" y1="188" x2="246" y2="188" class="ln" marker-end="url(#a)"/>
+  <g>
+    <rect x="250" y="150" width="180" height="76" rx="12" fill="#141310" stroke="#2a2823"/>
+    <text x="340" y="182" text-anchor="middle" class="t">Classify</text>
+    <text x="340" y="205" text-anchor="middle" class="m">sql.drop · rm -rf …</text>
+  </g>
+  <line x1="432" y1="188" x2="466" y2="188" class="ln" marker-end="url(#a)"/>
+  <g>
+    <rect x="470" y="150" width="180" height="76" rx="12" fill="#141310" stroke="#2a2823"/>
+    <text x="560" y="182" text-anchor="middle" class="t">Policy</text>
+    <text x="560" y="205" text-anchor="middle" class="m">allow · ask · deny</text>
+  </g>
+
+  <!-- branches -->
+  <path d="M652 188 H690 V75 H716" class="ln" marker-end="url(#a)"/>
+  <path d="M652 188 H716" class="ln" marker-end="url(#a)"/>
+  <path d="M652 188 H690 V301 H716" class="ln" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="720" y="37" width="200" height="76" rx="12" fill="#2a1414" stroke="#7a2a24"/>
+    <text x="820" y="69" text-anchor="middle" class="t" style="fill:#ff8a80">Deny</text>
+    <text x="820" y="92" text-anchor="middle" class="s">secrets · curl | sh</text>
+  </g>
+  <g>
+    <rect x="720" y="150" width="200" height="76" rx="12" fill="#13241a" stroke="#2f6a49"/>
+    <text x="820" y="182" text-anchor="middle" class="t" style="fill:#8fd1a5">Allow</text>
+    <text x="820" y="205" text-anchor="middle" class="s">reads · tests · plans</text>
+  </g>
+  <g>
+    <rect x="720" y="263" width="200" height="76" rx="12" fill="#2a1509" stroke="#ff5a1f"/>
+    <text x="820" y="295" text-anchor="middle" class="t" style="fill:#ff7a45">Ask</text>
+    <text x="820" y="318" text-anchor="middle" class="s">held for a human</text>
+  </g>
+
+  <line x1="922" y1="75" x2="956" y2="75" class="ln" marker-end="url(#a)"/>
+  <line x1="922" y1="188" x2="956" y2="188" class="ln" marker-end="url(#a)"/>
+  <line x1="922" y1="301" x2="956" y2="301" class="ln" marker-end="url(#a)"/>
+
+  <g>
+    <rect x="960" y="37" width="210" height="76" rx="12" fill="#141310" stroke="#2a2823"/>
+    <text x="1065" y="69" text-anchor="middle" class="t">Blocked</text>
+    <text x="1065" y="92" text-anchor="middle" class="s">agent told not to retry</text>
+  </g>
+  <g>
+    <rect x="960" y="150" width="210" height="76" rx="12" fill="#141310" stroke="#2a2823"/>
+    <text x="1065" y="182" text-anchor="middle" class="t">Runs</text>
+    <text x="1065" y="205" text-anchor="middle" class="s">no delay</text>
+  </g>
+  <g>
+    <rect x="960" y="263" width="210" height="76" rx="12" fill="#141310" stroke="#ff5a1f"/>
+    <text x="1065" y="290" text-anchor="middle" class="t">You approve</text>
+    <text x="1065" y="313" text-anchor="middle" class="s">→ snapshot → runs</text>
+    <text x="1065" y="331" text-anchor="middle" class="m">secondkey approve</text>
+  </g>
+
+  <!-- audit strip -->
+  <rect x="30" y="370" width="1140" height="46" rx="10" fill="#141310" stroke="#2a2823"/>
+  <text x="54" y="399" class="s"><tspan style="fill:#f2efe8;font-weight:600">Every decision</tspan> goes to a hash-chained audit log · <tspan style="fill:#f2efe8;font-weight:600">secondkey undo</tspan> puts any snapshot back</text>
+</svg>
